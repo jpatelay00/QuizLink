@@ -4,9 +4,13 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const here = dirname(fileURLToPath(import.meta.url));
-const defaultPath = join(here, "data", "quizlink.db");
+const volumePath = process.env.RAILWAY_VOLUME_MOUNT_PATH;
+const defaultPath = join(volumePath || join(here, "data"), "quizlink.db");
 
 export function openDatabase(path = process.env.QUIZLINK_DB || defaultPath) {
+  if (process.env.RAILWAY_ENVIRONMENT_NAME && !volumePath) {
+    throw new Error("Attach a persistent volume before starting QuizLink on Railway.");
+  }
   if (path !== ":memory:") mkdirSync(dirname(path), { recursive: true });
   const database = new DatabaseSync(path);
   database.exec("PRAGMA foreign_keys = ON;");

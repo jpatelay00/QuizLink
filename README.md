@@ -43,6 +43,8 @@ Open `http://localhost:5173` in this mode. Vite forwards `/api` requests to the 
 
 Copy `server/.env.example` to `server/.env` to configure the server. Set `GEMINI_API_KEY` there to enable quiz generation. `PORT` changes the API port; `QUIZLINK_DB` changes the SQLite file path. The `.env` file is ignored by Git. For HTTPS deployment, set `QUIZLINK_SECURE_COOKIES=1`.
 
+For cloud hosting with persistent SQLite storage, see [Hosting QuizLink](docs/hosting.md).
+
 ## Tests
 
 ```bash
