@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { openDatabase, transaction, utcTimestamp } from "./db.js";
 import { createAuth, hashPassword, verifyPassword } from "./auth.js";
 import { generateQuizData } from "./quiz.js";
+import { randomUUID } from "node:crypto";
 
 const validEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const clientDist = join(dirname(fileURLToPath(import.meta.url)), "..", "client", "dist");
@@ -97,6 +98,93 @@ export function createApp(database = openDatabase(), quizGenerator = generateQui
     res.json({ ok: true });
   });
 
+
+  //  Upload a text file for quiz generation
+  app.post("/api/study-files", auth.requireCsrf, (req, res) => {
+    const filename =
+      typeof req.body?.filename === "string"
+        ? req.body.filename.trim()
+        : "";
+
+    const content =
+      typeof req.body?.content === "string"
+        ? req.body.content.trim()
+        : "";
+
+    if (
+      !filename ||
+      filename.length > 255 ||
+      !filename.toLowerCase().endsWith(".txt")
+    ) {
+      return res.status(400).json({
+        error: "Only .txt study files are supported."
+      });
+    }
+
+    if (content.length < 20 || content.length > 20000) {
+      return res.status(400).json({
+        error: "The file must contain 20 to 20,000 characters."
+      });
+    }
+
+    const storageKey = `inline:${randomUUID()}`;
+
+    const result = database.prepare(`
+      INSERT INTO study_files (
+        owner_id,
+        original_name,
+        mime_type,
+        storage_key,
+        extracted_text
+      )
+      VALUES (?, ?, ?, ?, ?)
+    `).run(
+      req.user.userId,
+      filename,
+      "text/plain",
+      storageKey,
+      content
+    );
+
+    res.status(201).json({
+      fileId: Number(result.lastInsertRowid),
+      filename,
+      content
+    });
+  });
+
+
+  //  Retrieve a previously uploaded study file
+  app.get("/api/study-files/:id", auth.requireAuth, (req, res) => {
+    const fileId = Number(req.params.id);
+
+    if (!Number.isSafeInteger(fileId) || fileId <= 0) {
+      return res.status(400).json({
+        error: "Invalid file ID."
+      });
+    }
+
+    const file = database.prepare(`
+      SELECT
+        file_id AS fileId,
+        original_name AS filename,
+        extracted_text AS content,
+        uploaded_at AS uploadedAt
+      FROM study_files
+      WHERE file_id = ?
+        AND owner_id = ?
+    `).get(fileId, req.user.userId);
+
+    if (!file) {
+      return res.status(404).json({
+        error: "Study file not found."
+      });
+    }
+
+    res.json({ file });
+  });
+
+
   app.post("/api/generate-quiz", auth.requireCsrf, async (req, res) => {
     const notes = typeof req.body?.notes === "string" ? req.body.notes.trim() : "";
     const difficulty = req.body?.difficulty;
@@ -166,6 +254,48 @@ export function createApp(database = openDatabase(), quizGenerator = generateQui
     res.status(201).json({ studySetId: Number(result.lastInsertRowid) });
   });
 
+
+  // UC9: Search public study sets
+  app.get("/api/study-sets/search", auth.requireAuth, (req, res) => {
+    const query = typeof req.query.q === "string"
+      ? req.query.q.trim()
+      : "";
+
+    if (!query || query.length > 100) {
+      return res.status(400).json({
+        error: "Enter a search term between 1 and 100 characters."
+      });
+    }
+
+    const pattern = `%${query.replace(/[\\%_]/g, "\\$&")}%`;
+
+    const sets = database.prepare(`
+      SELECT
+        s.study_set_id AS studySetId,
+        s.owner_id AS ownerId,
+        s.title,
+        s.description,
+        s.topic,
+        s.subject,
+        s.visibility,
+        u.display_name AS ownerName
+      FROM study_sets s
+      JOIN users u ON u.user_id = s.owner_id
+      WHERE s.visibility = 'public'
+        AND (
+          s.title LIKE ? ESCAPE '\\'
+          OR s.topic LIKE ? ESCAPE '\\'
+          OR s.subject LIKE ? ESCAPE '\\'
+          OR s.description LIKE ? ESCAPE '\\'
+        )
+      ORDER BY s.created_at DESC
+      LIMIT 50
+    `).all(pattern, pattern, pattern, pattern);
+
+    res.json({ sets });
+  });
+
+
   app.get("/api/study-sets/:id", auth.requireAuth, (req, res) => {
     const studySetId = Number(req.params.id);
     if (!Number.isSafeInteger(studySetId) || studySetId <= 0) return res.status(400).json({ error: "Invalid study set." });
@@ -194,6 +324,92 @@ export function createApp(database = openDatabase(), quizGenerator = generateQui
     if (!result.changes) return res.status(404).json({ error: "Study set not found." });
     res.json({ ok: true });
   });
+
+  //  Retrieve comments on a public study set
+  app.get("/api/study-sets/:id/comments", auth.requireAuth, (req, res) => {
+    const studySetId = Number(req.params.id);
+
+    if (!Number.isSafeInteger(studySetId) || studySetId <= 0) {
+      return res.status(400).json({
+        error: "Invalid study set."
+      });
+    }
+
+    const set = database.prepare(`
+      SELECT study_set_id
+      FROM study_sets
+      WHERE study_set_id = ?
+        AND visibility = 'public'
+    `).get(studySetId);
+
+    if (!set) {
+      return res.status(404).json({
+        error: "Public study set not found."
+      });
+    }
+
+    const comments = database.prepare(`
+      SELECT
+        c.comment_id AS commentId,
+        c.body,
+        c.created_at AS createdAt,
+        u.display_name AS authorName
+      FROM study_set_comments c
+      JOIN users u ON u.user_id = c.author_id
+      WHERE c.study_set_id = ?
+        AND c.status = 'visible'
+      ORDER BY c.created_at ASC, c.comment_id ASC
+    `).all(studySetId);
+
+    res.json({ comments });
+  });
+
+
+  //  Post a comment on a public study set
+  app.post("/api/study-sets/:id/comments", auth.requireCsrf, (req, res) => {
+    const studySetId = Number(req.params.id);
+
+    const body = typeof req.body?.body === "string"
+      ? req.body.body.trim()
+      : "";
+
+    if (!Number.isSafeInteger(studySetId) || studySetId <= 0) {
+      return res.status(400).json({
+        error: "Invalid study set."
+      });
+    }
+
+    if (!body || body.length > 2000) {
+      return res.status(400).json({
+        error: "Enter a comment between 1 and 2000 characters."
+      });
+    }
+
+    const set = database.prepare(`
+      SELECT study_set_id
+      FROM study_sets
+      WHERE study_set_id = ?
+        AND visibility = 'public'
+    `).get(studySetId);
+
+    if (!set) {
+      return res.status(404).json({
+        error: "Public study set not found."
+      });
+    }
+
+    const result = database.prepare(`
+      INSERT INTO study_set_comments
+        (study_set_id, author_id, body)
+      VALUES (?, ?, ?)
+    `).run(studySetId, req.user.userId, body);
+
+    res.status(201).json({
+      commentId: Number(result.lastInsertRowid),
+      body
+    });
+  });
+
 
   app.post("/api/study-sets/:id/flashcards", auth.requireCsrf, (req, res) => {
     const studySetId = Number(req.params.id);
@@ -229,6 +445,90 @@ export function createApp(database = openDatabase(), quizGenerator = generateQui
       .run(req.user.userId, studySetId);
     res.json({ ok: true });
   });
+
+
+  // UC14: Bookmark an individual quiz question
+  app.put("/api/question-bookmarks/:id", auth.requireCsrf, (req, res) => {
+    const questionId = Number(req.params.id);
+
+    if (!Number.isSafeInteger(questionId) || questionId <= 0) {
+      return res.status(400).json({
+        error: "Invalid question ID."
+      });
+    }
+
+    const question = database.prepare(`
+      SELECT q.question_id
+      FROM questions q
+      JOIN quizzes z ON z.quiz_id = q.quiz_id
+      WHERE q.question_id = ?
+        AND z.owner_id = ?
+    `).get(questionId, req.user.userId);
+
+    if (!question) {
+      return res.status(404).json({
+        error: "Question not found."
+      });
+    }
+
+    database.prepare(`
+      INSERT OR IGNORE INTO question_bookmarks
+        (user_id, question_id)
+      VALUES (?, ?)
+    `).run(req.user.userId, questionId);
+
+    res.json({
+      ok: true,
+      bookmarked: true
+    });
+  });
+
+
+  // UC14: Retrieve the user's bookmarked questions
+  app.get("/api/question-bookmarks", auth.requireAuth, (req, res) => {
+    const bookmarks = database.prepare(`
+      SELECT
+        b.question_id AS questionId,
+        b.created_at AS bookmarkedAt,
+        q.prompt AS questionText,
+        q.explanation,
+        z.title AS quizTitle
+      FROM question_bookmarks b
+      JOIN questions q
+        ON q.question_id = b.question_id
+      JOIN quizzes z
+        ON z.quiz_id = q.quiz_id
+      WHERE b.user_id = ?
+        AND z.owner_id = ?
+      ORDER BY b.created_at DESC, b.question_id DESC
+    `).all(req.user.userId, req.user.userId);
+
+    res.json({ bookmarks });
+  });
+
+
+  // UC14: Remove a bookmarked question
+  app.delete("/api/question-bookmarks/:id", auth.requireCsrf, (req, res) => {
+    const questionId = Number(req.params.id);
+
+    if (!Number.isSafeInteger(questionId) || questionId <= 0) {
+      return res.status(400).json({
+        error: "Invalid question ID."
+      });
+    }
+
+    database.prepare(`
+      DELETE FROM question_bookmarks
+      WHERE user_id = ?
+        AND question_id = ?
+    `).run(req.user.userId, questionId);
+
+    res.json({
+      ok: true,
+      bookmarked: false
+    });
+  });
+
 
   app.post("/api/quiz-attempts", auth.requireCsrf, (req, res) => {
     const quizId = Number(req.body?.quizId);
