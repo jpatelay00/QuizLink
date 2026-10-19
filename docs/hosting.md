@@ -1,21 +1,31 @@
 # Hosting QuizLink
 
-QuizLink's Express server serves the built React client and stores accounts, sessions, study sets, and attempts in SQLite. A hosted instance therefore needs both a Node.js 24 runtime and a persistent writable directory. The root `Dockerfile` builds the client and starts the server in one container.
+QuizLink's Express server serves the built React client and stores application records in SQLite. A hosted instance needs Node.js 24 or newer, HTTPS, and a persistent writable database directory. The root `Dockerfile` builds the client and starts the server in one container.
 
 ## Railway deployment
 
-1. In Railway, create a project from the GitHub repository `jpatelay00/QuizLink` and select the `main` branch. Keep the service root at the repository root. Railway detects the root `Dockerfile`.
-2. Add a volume to that service with mount path `/data`. Railway supplies `RAILWAY_VOLUME_MOUNT_PATH` automatically; QuizLink places `quizlink.db` there. The server refuses to start on Railway without an attached volume, preventing accidental use of temporary storage.
-3. Add the service variable `QUIZLINK_SECURE_COOKIES=1`. Add `GEMINI_API_KEY` only if the quiz-generation feature will be demonstrated. Do not put the key in Git or in the client. Railway supplies `PORT` automatically.
-4. Deploy the service. In **Settings → Networking → Public Networking**, choose **Generate Domain**. Open the generated HTTPS URL and check `/api/health` for `{"status":"ok"}`.
-5. Register a separate demo account. Create a study set and flashcard, log out and back in, then confirm the data remains after a redeploy. This verifies that SQLite is on the volume.
+1. Create a Railway service from `jpatelay00/QuizLink` and select the intended branch or commit. Keep the service root at the repository root so Railway uses the root `Dockerfile`.
+2. Attach a volume with mount path `/data`. Railway supplies `RAILWAY_VOLUME_MOUNT_PATH`; QuizLink stores `quizlink.db` on that volume unless `QUIZLINK_DB` overrides the path. The server refuses to start in a Railway environment without an attached volume.
+3. Set `QUIZLINK_SECURE_COOKIES=1`. Set `GEMINI_API_KEY` on the service only if live quiz generation is needed. Railway supplies `PORT`. Do not commit credentials or put them in the client.
+4. Deploy and generate an HTTPS domain through the service's networking settings. Check `/api/health` for `{"status":"ok"}`. This confirms that the server responds; it does not confirm database persistence or Gemini availability.
+5. Complete the application and persistence checks below before a demonstration.
 
-Railway's Free plan currently includes a small volume and monthly usage credit, but service availability depends on those limits. Check the project's usage before relying on it for a class demo. See Railway's [pricing](https://docs.railway.com/pricing/plans), [volume](https://docs.railway.com/volumes), [Dockerfile](https://docs.railway.com/builds/dockerfiles), and [public networking](https://docs.railway.com/networking/public-networking) documentation.
+Hosting quotas, pricing, and interface labels can change. Review the service's current usage and provider settings before relying on it in class. Provider references: [volumes](https://docs.railway.com/volumes), [Dockerfiles](https://docs.railway.com/builds/dockerfiles), and [public networking](https://docs.railway.com/networking/public-networking).
 
-## Sprint report evidence
+## Check the deployed application
 
-The Sprint 2 brief allows CODD or another host. If hosted, include the live URL and a **dedicated demo account** in the report's run instructions, as the brief requests. Use a password created only for that demo account; do not share a personal, GitHub, Railway, or API password. Include screenshots of the hosted pages used for the Sprint 2 demonstration. The report should still include the command-line build and run steps from the README.
+- Confirm the deployed commit matches the intended Sprint 3 code. A successful repository merge does not by itself confirm that a deployment has updated.
+- Register a dedicated demonstration account. Create a public study set and a flashcard, search for the set, and post a comment. Reload and reopen the set to verify the saved data is retrieved.
+- Upload a supported `.txt` file and confirm its text appears in quiz notes. PDF upload is not implemented.
+- With Gemini configured, generate and complete a quiz. Check the saved attempt and answer review, bookmark a question from your generated quiz, and verify the bookmark after signing in again.
+- Redeploy or restart the service and verify the study set, comment, saved attempt, and bookmark still exist. This checks persistent storage beyond a browser session.
+
+## Local build and verification
+
+Use the terminal commands in [the README](../README.md) to install dependencies, build the client, run backend tests and linting, and start the app without an IDE. The automated integration test uses a fixed quiz generator and does not verify live Gemini behavior.
+
+For a hosted class demonstration, supply the deployment URL and a dedicated demo account as required by the assignment. Share only that demo account's credentials; keep personal, GitHub, hosting, and API credentials private.
 
 ## Other hosts
 
-A different provider can run the same Dockerfile if it supports Node.js 24, HTTPS, and a persistent volume. Mount the volume and set `QUIZLINK_DB` to a file on it, or provide `RAILWAY_VOLUME_MOUNT_PATH` if using Railway. Hosts with temporary filesystems will lose the SQLite database on restart, so they are unsuitable for demonstrating persistent accounts and sessions.
+A different provider can run the same Dockerfile if it supports Node.js 24, HTTPS, and a persistent writable volume. Set `QUIZLINK_DB` to a file on that volume. Without persistent storage, a new container may start with an empty database. In containers, supply configuration through environment variables; the server's working directory is `/app`.
