@@ -68,6 +68,88 @@ test("registration, quiz persistence, history, sessions, and roles", async () =>
     const quizId = generated.data.quizId;
     assert.equal(database.prepare("SELECT count(*) AS count FROM questions WHERE quiz_id=?").get(quizId).count, 3);
 
+
+    // UC14: Bookmark Questions integration tests
+
+    const questionId = generated.data.questions[0].questionId;
+
+    // Save a bookmark
+    const savedBookmark = await request(
+      `/api/question-bookmarks/${questionId}`,
+      {
+        method: "PUT",
+        cookie: ownerCookie,
+        csrfToken: ownerCsrf
+      }
+    );
+
+    assert.equal(savedBookmark.status, 200);
+    assert.equal(savedBookmark.data.bookmarked, true);
+
+    // Verify the bookmark is stored in SQLite
+    const storedBookmark = database.prepare(`
+      SELECT *
+      FROM question_bookmarks
+      WHERE user_id = ? AND question_id = ?
+    `).get(registered.data.user.userId, questionId);
+
+    assert.ok(storedBookmark);
+
+    // Retrieve saved questions
+    const savedQuestions = await request(
+      "/api/question-bookmarks",
+      { cookie: ownerCookie }
+    );
+
+    assert.equal(savedQuestions.status, 200);
+    assert.equal(savedQuestions.data.bookmarks.length, 1);
+    assert.equal(
+      savedQuestions.data.bookmarks[0].questionId,
+      questionId
+    );
+
+    // Verify duplicate bookmarks are prevented
+    const duplicateBookmark = await request(
+      `/api/question-bookmarks/${questionId}`,
+      {
+        method: "PUT",
+        cookie: ownerCookie,
+        csrfToken: ownerCsrf
+      }
+    );
+
+    assert.equal(duplicateBookmark.status, 200);
+
+    const bookmarkCount = database.prepare(`
+      SELECT COUNT(*) AS count
+      FROM question_bookmarks
+      WHERE user_id = ? AND question_id = ?
+    `).get(registered.data.user.userId, questionId);
+
+    assert.equal(bookmarkCount.count, 1);
+
+    // Remove the bookmark
+    const removedBookmark = await request(
+      `/api/question-bookmarks/${questionId}`,
+      {
+        method: "DELETE",
+        cookie: ownerCookie,
+        csrfToken: ownerCsrf
+      }
+    );
+
+    assert.equal(removedBookmark.status, 200);
+    assert.equal(removedBookmark.data.bookmarked, false);
+
+    // Verify removal
+    const remainingBookmarks = await request(
+      "/api/question-bookmarks",
+      { cookie: ownerCookie }
+    );
+
+    assert.equal(remainingBookmarks.data.bookmarks.length, 0);
+
+
     const submitted = await request("/api/quiz-attempts", {
       method: "POST", cookie: ownerCookie, csrfToken: ownerCsrf,
       body: { quizId, answers: [0, 0, 0] }

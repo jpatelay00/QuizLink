@@ -20,12 +20,20 @@ function App() {
   const [result, setResult] = useState(null);
   const [flippedCards, setFlippedCards] = useState({});
   const [history, setHistory] = useState([]);
+  const [bookmarks, setBookmarks] = useState([]);
   const [review, setReview] = useState(null);
   const [profileForm, setProfileForm] = useState({ displayName: "", bio: "" });
   const [passwordForm, setPasswordForm] = useState({ currentPassword: "", newPassword: "" });
   const [adminUsers, setAdminUsers] = useState([]);
   const [studySets, setStudySets] = useState([]);
+  const [searchTerm, setSearchTerm] = useState("");
+  const [searchResults, setSearchResults] = useState([]);
+  const [hasSearched, setHasSearched] = useState(false);
+  const [searching, setSearching] = useState(false);
   const [selectedSet, setSelectedSet] = useState(null);
+  const [comments, setComments] = useState([]);
+  const [newComment, setNewComment] = useState("");
+  const [postingComment, setPostingComment] = useState(false);
   const [setForm, setSetForm] = useState({ title: "", description: "", topic: "", subject: "", visibility: "private" });
   const [cardForm, setCardForm] = useState({ front: "", back: "" });
   const [flippedSetCards, setFlippedSetCards] = useState({});
@@ -37,13 +45,25 @@ function App() {
         setCsrfToken(token);
         setProfileForm({ displayName: currentUser.displayName, bio: currentUser.bio || "" });
       })
-      .catch(() => {})
+      .catch(() => { })
       .finally(() => setCheckingSession(false));
   }, []);
 
   useEffect(() => {
-    if (user) api("/api/quiz-attempts").then((data) => setHistory(data.attempts)).catch(() => {});
+    if (user) api("/api/quiz-attempts").then((data) => setHistory(data.attempts)).catch(() => { });
   }, [user]);
+
+
+
+  useEffect(() => {
+    if (user) {
+      api("/api/question-bookmarks")
+        .then((data) => setBookmarks(data.bookmarks))
+        .catch(() => {});
+    }
+  }, [user]);
+
+
 
   function showView(nextView) {
     setView(nextView);
@@ -53,6 +73,80 @@ function App() {
       api("/api/admin/users").then((data) => setAdminUsers(data.users)).catch((err) => setError(err.message));
     }
     if (nextView === "sets") refreshSets();
+    if (nextView === "bookmarks") refreshBookmarks();
+  }
+
+
+  async function refreshBookmarks() {
+    try {
+      const data = await api("/api/question-bookmarks");
+      setBookmarks(data.bookmarks);
+    } catch (err) {
+      setError(err.message);
+    }
+  }
+
+  async function addBookmark(questionId) {
+    setError("");
+
+    try {
+      await api(`/api/question-bookmarks/${questionId}`, {
+        method: "PUT",
+        csrfToken,
+      });
+
+      await refreshBookmarks();
+      setMessage("Question bookmarked successfully.");
+    } catch (err) {
+      setError(err.message);
+    }
+  }
+
+  async function removeBookmark(questionId) {
+    setError("");
+
+    try {
+      await api(`/api/question-bookmarks/${questionId}`, {
+        method: "DELETE",
+        csrfToken,
+      });
+
+      await refreshBookmarks();
+      setMessage("Bookmark removed.");
+    } catch (err) {
+      setError(err.message);
+    }
+  }
+
+
+  async function searchPublicSets(event) {
+    event.preventDefault();
+    setError("");
+
+    const query = searchTerm.trim();
+
+    if (!query) {
+      setSearchResults([]);
+      setHasSearched(false);
+      return;
+    }
+
+    setSearching(true);
+
+    try {
+      const data = await api(
+        `/api/study-sets/search?q=${encodeURIComponent(query)}`
+      );
+
+      setSearchResults(data.sets);
+      setHasSearched(true);
+    } catch (err) {
+      setError(err.message);
+      setSearchResults([]);
+      setHasSearched(false);
+    } finally {
+      setSearching(false);
+    }
   }
 
   async function refreshSets() {
@@ -62,11 +156,25 @@ function App() {
     } catch (err) { setError(err.message); }
   }
 
+
   async function openSet(studySetId) {
     setError("");
-    try { setSelectedSet(await api(`/api/study-sets/${studySetId}`)); setFlippedSetCards({}); }
-    catch (err) { setError(err.message); }
+    setComments([]);
+    setNewComment("");
+
+    try {
+      const data = await api(`/api/study-sets/${studySetId}`);
+      setSelectedSet(data);
+      setFlippedSetCards({});
+      if (data.set.visibility === "public") {
+        const result = await api(`/api/study-sets/${studySetId}/comments`);
+        setComments(result.comments);
+      }
+    } catch (err) {
+      setError(err.message);
+    }
   }
+
 
   async function createSet(event) {
     event.preventDefault(); setError("");
@@ -77,6 +185,41 @@ function App() {
       setMessage("Study set created.");
     } catch (err) { setError(err.message); }
   }
+
+
+  async function postComment(event) {
+    event.preventDefault();
+    setError("");
+
+    if (!selectedSet || !newComment.trim()) return;
+
+    setPostingComment(true);
+
+    try {
+      const studySetId = selectedSet.set.studySetId;
+
+      await api(`/api/study-sets/${studySetId}/comments`, {
+        method: "POST",
+        body: { body: newComment.trim() },
+        csrfToken,
+      });
+
+      setNewComment("");
+
+      const data = await api(
+        `/api/study-sets/${studySetId}/comments`
+      );
+
+      setComments(data.comments);
+      setMessage("Comment posted successfully.");
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setPostingComment(false);
+    }
+  }
+
+
 
   async function addCard(event) {
     event.preventDefault(); setError("");
@@ -136,12 +279,66 @@ function App() {
       setReview(null);
       setStudySets([]);
       setSelectedSet(null);
+      setBookmarks([]);
       setView("quiz");
       setMessage("You have logged out.");
     } catch (err) {
       setError(err.message);
     }
   }
+
+
+  async function uploadStudyFile(event) {
+    const file = event.target.files?.[0];
+
+    if (!file) return;
+
+    setError("");
+    setMessage("");
+
+    if (!file.name.toLowerCase().endsWith(".txt")) {
+      setError("Please select a .txt file.");
+      event.target.value = "";
+      return;
+    }
+
+    if (file.size > 60000) {
+      setError("The selected file is too large.");
+      event.target.value = "";
+      return;
+    }
+
+    setBusy(true);
+
+    try {
+      const content = await file.text();
+
+      if (content.trim().length < 20 ||
+          content.trim().length > 20000) {
+        throw new Error(
+          "The file must contain 20 to 20,000 characters."
+        );
+      }
+
+      const data = await api("/api/study-files", {
+        method: "POST",
+        body: {
+          filename: file.name,
+          content
+        },
+        csrfToken
+      });
+
+      setNotes(data.content);
+      setMessage(`Uploaded ${data.filename} successfully.`);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+      event.target.value = "";
+    }
+  }
+
 
   async function generateQuiz() {
     setError("");
@@ -210,6 +407,7 @@ function App() {
     }
   }
 
+
   async function changePassword(event) {
     event.preventDefault();
     setError("");
@@ -250,6 +448,7 @@ function App() {
           <button className={view === "quiz" ? "nav-active" : "nav-button"} onClick={() => showView("quiz")}><span className="nav-icon">◫</span>Practice lab</button>
           <button className={view === "sets" ? "nav-active" : "nav-button"} onClick={() => showView("sets")}><span className="nav-icon">▦</span>Study sets</button>
           <button className={view === "history" ? "nav-active" : "nav-button"} onClick={() => showView("history")}><span className="nav-icon">◷</span>Quiz history</button>
+          <button className={view === "bookmarks" ? "nav-active" : "nav-button"} onClick={() => showView("bookmarks")}><span className="nav-icon">☆</span>Saved Questions</button>
           <button className={view === "profile" ? "nav-active" : "nav-button"} onClick={() => showView("profile")}><span className="nav-icon">◉</span>Profile</button>
           {user.role === "admin" && <button className={view === "admin" ? "nav-active" : "nav-button"} onClick={() => showView("admin")}><span className="nav-icon">⚙</span>Admin</button>}
         </nav>
@@ -260,142 +459,321 @@ function App() {
           : <header className="guest-topbar"><div className="brand-lockup"><span className="brand-mark">Q</span><div><strong>QuizLink</strong><small>STUDY WORKSPACE</small></div></div><span>CSC 4350 · GROUP 6</span></header>}
         <main className="content">
 
-      {error && <p role="alert" className="alert error">{error}</p>}
-      {message && <p role="status" className="alert success">{message}</p>}
+          {error && <p role="alert" className="alert error">{error}</p>}
+          {message && <p role="status" className="alert success">{message}</p>}
 
-      {!user ? (
-        <div className="welcome-grid">
-          <section className="welcome-panel">
-            <p className="eyebrow">YOUR MATERIAL. YOUR MOMENTUM.</p>
-            <h1>Make the most of what you study.</h1>
-            <p>Keep your notes, flashcards, and quiz results in one place. Come back tomorrow and pick up where you left off.</p>
-            <div className="welcome-feature"><span>01</span><div><strong>Collect</strong><p>Organize topics into public or private study sets.</p></div></div>
-            <div className="welcome-feature"><span>02</span><div><strong>Practice</strong><p>Make flashcards or build a quiz from your notes.</p></div></div>
-            <div className="welcome-feature"><span>03</span><div><strong>Review</strong><p>See your answers and return to past attempts.</p></div></div>
-          </section>
-          <section className="card auth-card">
-            <p className="eyebrow">GET STARTED</p>
-            <div className="auth-tabs">
-              <button className={authMode === "login" ? "tab-active" : "tab"} onClick={() => { setAuthMode("login"); setError(""); }}>Log in</button>
-              <button className={authMode === "register" ? "tab-active" : "tab"} onClick={() => { setAuthMode("register"); setError(""); }}>Sign up</button>
+          {!user ? (
+            <div className="welcome-grid">
+              <section className="welcome-panel">
+                <p className="eyebrow">YOUR MATERIAL. YOUR MOMENTUM.</p>
+                <h1>Make the most of what you study.</h1>
+                <p>Keep your notes, flashcards, and quiz results in one place. Come back tomorrow and pick up where you left off.</p>
+                <div className="welcome-feature"><span>01</span><div><strong>Collect</strong><p>Organize topics into public or private study sets.</p></div></div>
+                <div className="welcome-feature"><span>02</span><div><strong>Practice</strong><p>Make flashcards or build a quiz from your notes.</p></div></div>
+                <div className="welcome-feature"><span>03</span><div><strong>Review</strong><p>See your answers and return to past attempts.</p></div></div>
+              </section>
+              <section className="card auth-card">
+                <p className="eyebrow">GET STARTED</p>
+                <div className="auth-tabs">
+                  <button className={authMode === "login" ? "tab-active" : "tab"} onClick={() => { setAuthMode("login"); setError(""); }}>Log in</button>
+                  <button className={authMode === "register" ? "tab-active" : "tab"} onClick={() => { setAuthMode("register"); setError(""); }}>Sign up</button>
+                </div>
+                <h2>{authMode === "register" ? "Create your account" : "Welcome back"}</h2>
+                <form onSubmit={handleAuth}>
+                  {authMode === "register" && <label>Display name<input value={authForm.displayName} onChange={(event) => setAuthForm({ ...authForm, displayName: event.target.value })} maxLength="100" required /></label>}
+                  <label>Email<input type="email" value={authForm.email} onChange={(event) => setAuthForm({ ...authForm, email: event.target.value })} required /></label>
+                  <label>Password<input type="password" value={authForm.password} onChange={(event) => setAuthForm({ ...authForm, password: event.target.value })} minLength="8" required /></label>
+                  <button type="submit" className="primary" disabled={busy}>{busy ? "Please wait…" : authMode === "register" ? "Create account" : "Log in"}</button>
+                </form>
+              </section>
             </div>
-            <h2>{authMode === "register" ? "Create your account" : "Welcome back"}</h2>
-            <form onSubmit={handleAuth}>
-              {authMode === "register" && <label>Display name<input value={authForm.displayName} onChange={(event) => setAuthForm({ ...authForm, displayName: event.target.value })} maxLength="100" required /></label>}
-              <label>Email<input type="email" value={authForm.email} onChange={(event) => setAuthForm({ ...authForm, email: event.target.value })} required /></label>
-              <label>Password<input type="password" value={authForm.password} onChange={(event) => setAuthForm({ ...authForm, password: event.target.value })} minLength="8" required /></label>
-              <button type="submit" className="primary" disabled={busy}>{busy ? "Please wait…" : authMode === "register" ? "Create account" : "Log in"}</button>
-            </form>
-          </section>
-        </div>
-      ) : (
-        <>
-          {view === "quiz" && <>
-            <section className="page-heading"><div><p className="eyebrow">PRACTICE LAB / 01</p><h1>Practice starts with your notes.</h1><p>Build questions from material you are studying, then review every answer.</p></div><div className="heading-stat"><strong>{history.length}</strong><span>completed {history.length === 1 ? "quiz" : "quizzes"}</span></div></section>
-            <div className="work-grid"><section className="card builder-card">
-              <div className="section-kicker"><span>01</span><span>CREATE A QUIZ</span></div>
-              <h2>Add your study material</h2>
-              <label htmlFor="study-notes">Study material</label>
-              <textarea id="study-notes" value={notes} onChange={(event) => setNotes(event.target.value)} maxLength="20000" />
-              <p>Enter at least 20 characters from the material you want to study.</p>
-              <div className="form-row"><label htmlFor="difficulty">Difficulty</label>
-                <select id="difficulty" value={difficulty} onChange={(event) => setDifficulty(event.target.value)}>
-                  <option value="easy">Easy</option><option value="medium">Medium</option><option value="hard">Hard</option>
-                </select></div>
-              <button className="primary" onClick={generateQuiz} disabled={busy}>{busy ? "Working…" : "Generate quiz"}<span aria-hidden="true">↗</span></button>
-            </section><aside className="guide-panel"><span className="guide-symbol">✳</span><h2>How it works</h2><p>Use material you are currently learning. The questions and explanations will be saved to your account after generation.</p><ol><li>Paste your notes</li><li>Choose a difficulty</li><li>Answer and review</li></ol><p className="guide-footnote">Quiz generation requires a server API key. Study sets and flashcards work without one.</p></aside></div>
+          ) : (
 
-            {quiz && <section className="card">
-              <p className="eyebrow">Saved quiz #{quiz.quizId}</p><h2>{quiz.title}</h2><p>{quiz.summary}</p>
-              {quiz.questions.map((question, questionIndex) => <div className="question" key={question.questionId}>
-                <h3>{questionIndex + 1}. {question.questionText}</h3>
+            <>
+              {view === "quiz" && <>
+                <section className="page-heading"><div><p className="eyebrow">PRACTICE LAB / 01</p><h1>Practice starts with your notes.</h1><p>Build questions from material you are studying, then review every answer.</p></div><div className="heading-stat"><strong>{history.length}</strong><span>completed {history.length === 1 ? "quiz" : "quizzes"}</span></div></section>
+                <div className="work-grid"><section className="card builder-card">
+                  <div className="section-kicker"><span>01</span><span>CREATE A QUIZ</span></div>
+                  <h2>Add your study material</h2>
+                  <label htmlFor="study-file">Upload Study Material (.txt)</label>
+                  <input id="study-file" type="file" accept=".txt,text/plain" onChange={uploadStudyFile} disabled={busy}/>
+                  <p>
+                    Upload a text file to automatically fill your study notes.
+                  </p>
+                  <label htmlFor="study-notes">Study material</label>
+                  <textarea id="study-notes" value={notes} onChange={(event) => setNotes(event.target.value)} maxLength="20000" />
+                  <p>Enter at least 20 characters from the material you want to study.</p>
+                  <div className="form-row"><label htmlFor="difficulty">Difficulty</label>
+                    <select id="difficulty" value={difficulty} onChange={(event) => setDifficulty(event.target.value)}>
+                      <option value="easy">Easy</option><option value="medium">Medium</option><option value="hard">Hard</option>
+                    </select></div>
+                  <button className="primary" onClick={generateQuiz} disabled={busy}>{busy ? "Working…" : "Generate quiz"}<span aria-hidden="true">↗</span></button>
+                </section><aside className="guide-panel"><span className="guide-symbol">✳</span><h2>How it works</h2><p>Use material you are currently learning. The questions and explanations will be saved to your account after generation.</p><ol><li>Paste your notes</li><li>Choose a difficulty</li><li>Answer and review</li></ol><p className="guide-footnote">Quiz generation requires a server API key. Study sets and flashcards work without one.</p></aside></div>
+
+                {quiz && <section className="card">
+                  <p className="eyebrow">Saved quiz #{quiz.quizId}</p><h2>{quiz.title}</h2><p>{quiz.summary}</p>
+                  {quiz.questions.map((question, questionIndex) => <div className="question" key={question.questionId}>
+                    <h3>{questionIndex + 1}. {question.questionText}</h3>
+
+                <button
+                  type="button"
+                  onClick={() =>
+                    bookmarks.some(
+                      (saved) => saved.questionId === question.questionId
+                    )
+                      ? removeBookmark(question.questionId)
+                      : addBookmark(question.questionId)
+                  }
+                >
+                  {bookmarks.some(
+                    (saved) => saved.questionId === question.questionId
+                  )
+                    ? "★ Bookmarked"
+                    : "☆ Bookmark"}
+                </button>
+
+
                 {question.choices.map((choice, choiceIndex) => {
-                  let className = "choice";
-                  if (selectedAnswers[questionIndex] === choiceIndex) className += " selected";
-                  if (result && choiceIndex === question.correctAnswerIndex) className += " correct";
-                  if (result && selectedAnswers[questionIndex] === choiceIndex && choiceIndex !== question.correctAnswerIndex) className += " wrong";
-                  return <button key={choiceIndex} className={className} disabled={Boolean(result)}
-                    onClick={() => setSelectedAnswers({ ...selectedAnswers, [questionIndex]: choiceIndex })}>{choice}</button>;
-                })}
-                {result && <div className="explanation"><strong>Correct answer:</strong> {question.choices[question.correctAnswerIndex]}<p>{question.explanation}</p></div>}
-              </div>)}
-              {!result ? <button className="primary" onClick={submitQuiz} disabled={busy}>Submit quiz</button>
-                : <p className="score">Score: {result.score} / {result.total}</p>}
-            </section>}
+                      let className = "choice";
+                      if (selectedAnswers[questionIndex] === choiceIndex) className += " selected";
+                      if (result && choiceIndex === question.correctAnswerIndex) className += " correct";
+                      if (result && selectedAnswers[questionIndex] === choiceIndex && choiceIndex !== question.correctAnswerIndex) className += " wrong";
+                      return <button key={choiceIndex} className={className} disabled={Boolean(result)}
+                        onClick={() => setSelectedAnswers({ ...selectedAnswers, [questionIndex]: choiceIndex })}>{choice}</button>;
+                    })}
+                    {result && <div className="explanation"><strong>Correct answer:</strong> {question.choices[question.correctAnswerIndex]}<p>{question.explanation}</p></div>}
+                  </div>)}
+                  {!result ? <button className="primary" onClick={submitQuiz} disabled={busy}>Submit quiz</button>
+                    : <p className="score">Score: {result.score} / {result.total}</p>}
+                </section>}
 
-            {quiz?.flashcards?.length > 0 && <section className="card"><h2>Flashcards</h2><p>Click a card to flip it.</p>
-              <div className="flashcard-grid">{quiz.flashcards.map((card, index) => <button className="flashcard" key={index}
-                onClick={() => setFlippedCards({ ...flippedCards, [index]: !flippedCards[index] })}>
-                {flippedCards[index] ? card.back : card.front}</button>)}</div></section>}
+                {quiz?.flashcards?.length > 0 && <section className="card"><h2>Flashcards</h2><p>Click a card to flip it.</p>
+                  <div className="flashcard-grid">{quiz.flashcards.map((card, index) => <button className="flashcard" key={index}
+                    onClick={() => setFlippedCards({ ...flippedCards, [index]: !flippedCards[index] })}>
+                    {flippedCards[index] ? card.back : card.front}</button>)}</div></section>}
+              </>}
+
+              {view === "sets" && <>
+                <section className="page-heading"><div><p className="eyebrow">YOUR LIBRARY / 02</p><h1>Keep ideas together.</h1><p>Create a private set or share it publicly. Add flashcards to practice key terms.</p></div><div className="heading-stat"><strong>{studySets.filter((set) => set.ownerId === user.userId).length}</strong><span>your {studySets.filter((set) => set.ownerId === user.userId).length === 1 ? "set" : "sets"}</span></div></section>
+
+                <section className="card">
+                  <h2>Search Public Study Sets</h2>
+                  <p>Find study materials shared by other students.</p>
+
+                  <form onSubmit={searchPublicSets}>
+                    <label>
+                      Search by title, topic, subject, or keyword
+
+                      <input
+                        type="text"
+                        placeholder="Example: Biology, Math, Algorithms"
+                        value={searchTerm}
+                        maxLength={100}
+                        onChange={(event) => setSearchTerm(event.target.value)}
+                      />
+                    </label>
+
+                    <button
+                      className="primary"
+                      type="submit"
+                      disabled={searching}
+                    >
+                      {searching ? "Searching..." : "Search"}
+                    </button>
+                  </form>
+
+                  {hasSearched && (
+                    <div>
+                      <h3>Search Results</h3>
+
+                      {searchResults.length === 0 ? (
+                        <p>No matching public study sets found.</p>
+                      ) : (
+                        searchResults.map((set) => (
+                          <div className="set-row" key={set.studySetId}>
+                            <div>
+                              <strong>{set.title}</strong>
+
+                              <p>
+                                {set.subject || set.topic || "General"}
+                                {" · "}
+                                {set.ownerName}
+                              </p>
+
+
+                              {set.description && (
+                                <p>{set.description}</p>
+                              )}
+                            </div>
+
+                            <div className="set-actions">
+                              <button
+                                type="button"
+                                onClick={() => openSet(set.studySetId)}
+                              >
+                                Open
+                              </button>
+                            </div>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  )}
+                </section>
+
+                <section className="card"><h2>Create a study set</h2><form onSubmit={createSet}>
+                  <label>Title<input value={setForm.title} maxLength="150" required onChange={(event) => setSetForm({ ...setForm, title: event.target.value })} /></label>
+                  <label>Description<textarea value={setForm.description} maxLength="1000" onChange={(event) => setSetForm({ ...setForm, description: event.target.value })} /></label>
+                  <div className="field-grid"><label>Topic<input value={setForm.topic} maxLength="100" onChange={(event) => setSetForm({ ...setForm, topic: event.target.value })} /></label>
+                    <label>Subject<input value={setForm.subject} maxLength="100" onChange={(event) => setSetForm({ ...setForm, subject: event.target.value })} /></label></div>
+                  <label>Visibility<select value={setForm.visibility} onChange={(event) => setSetForm({ ...setForm, visibility: event.target.value })}><option value="private">Private</option><option value="public">Public</option></select></label>
+                  <p><button className="primary" type="submit">Create set</button></p>
+                </form></section>
+                <section className="card"><h2>Available study sets</h2>
+                  {studySets.length === 0 ? <p>No study sets yet. Create the first one above.</p> : studySets.map((set) =>
+                    <div className="set-row" key={set.studySetId}>
+                      <div><strong>{set.title}</strong><p>{set.visibility} · {set.ownerName} · {set.cardCount} flashcards</p>{set.description && <p>{set.description}</p>}</div>
+                      <div className="set-actions"><button onClick={() => openSet(set.studySetId)}>Open</button>
+                        <button onClick={() => toggleFavorite(set)}>{set.isFavorite ? "Unfavorite" : "Favorite"}</button></div>
+                    </div>)}
+                </section>
+                {selectedSet && <section className="card"><h2>{selectedSet.set.title}</h2>
+                  <p>{selectedSet.set.visibility} · {selectedSet.set.ownerName}</p>
+                  {selectedSet.set.ownerId === user.userId && <div className="form-row"><label htmlFor="set-visibility">Visibility</label>
+                    <select id="set-visibility" value={selectedSet.set.visibility} onChange={(event) => changeVisibility(event.target.value)}><option value="private">Private</option><option value="public">Public</option></select></div>}
+                  <h3>Flashcards</h3>
+                  {selectedSet.cards.length === 0 ? <p>No flashcards yet.</p> : <div className="flashcard-grid">{selectedSet.cards.map((card) =>
+                    <button className="flashcard" key={card.flashcardId} onClick={() => setFlippedSetCards({ ...flippedSetCards, [card.flashcardId]: !flippedSetCards[card.flashcardId] })}>{flippedSetCards[card.flashcardId] ? card.back : card.front}</button>)}</div>}
+                  {selectedSet.set.ownerId === user.userId && <form onSubmit={addCard}><h3>Add a flashcard</h3>
+                    <label>Front<input value={cardForm.front} maxLength="500" required onChange={(event) => setCardForm({ ...cardForm, front: event.target.value })} /></label>
+                    <label>Back<textarea value={cardForm.back} maxLength="2000" required onChange={(event) => setCardForm({ ...cardForm, back: event.target.value })} /></label>
+                    <button className="primary" type="submit">Save flashcard</button></form>}
+
+              {selectedSet.set.visibility === "public" && (
+                <div className="comments-section">
+                  <h3>Comments</h3>
+
+                  {comments.length === 0 ? (
+                    <p>No comments yet. Be the first to comment!</p>
+                  ) : (
+                    comments.map((comment) => (
+                      <div
+                        className="set-row"
+                        key={comment.commentId}
+                      >
+                        <div>
+                          <strong>{comment.authorName}</strong>
+                          <p>{comment.body}</p>
+                        </div>
+                      </div>
+                    ))
+                  )}
+
+
+
+<form onSubmit={postComment}>
+                    <label>
+                      Add a comment
+                      <textarea
+                        value={newComment}
+                        onChange={(event) =>
+                          setNewComment(event.target.value)
+                        }
+                        maxLength={2000}
+                        required
+                        placeholder="Share your thoughts..."
+                      />
+                    </label>
+
+                    <button
+                      className="primary"
+                      type="submit"
+                      disabled={postingComment}
+                    >
+                      {postingComment
+                        ? "Posting..."
+                        : "Post Comment"}
+                    </button>
+                  </form>
+                </div>
+              )}
+            </section>}
           </>}
 
-          {view === "sets" && <>
-            <section className="page-heading"><div><p className="eyebrow">YOUR LIBRARY / 02</p><h1>Keep ideas together.</h1><p>Create a private set or share it publicly. Add flashcards to practice key terms.</p></div><div className="heading-stat"><strong>{studySets.filter((set) => set.ownerId === user.userId).length}</strong><span>your {studySets.filter((set) => set.ownerId === user.userId).length === 1 ? "set" : "sets"}</span></div></section>
-            <section className="card"><h2>Create a study set</h2><form onSubmit={createSet}>
-              <label>Title<input value={setForm.title} maxLength="150" required onChange={(event) => setSetForm({ ...setForm, title: event.target.value })} /></label>
-              <label>Description<textarea value={setForm.description} maxLength="1000" onChange={(event) => setSetForm({ ...setForm, description: event.target.value })} /></label>
-              <div className="field-grid"><label>Topic<input value={setForm.topic} maxLength="100" onChange={(event) => setSetForm({ ...setForm, topic: event.target.value })} /></label>
-                <label>Subject<input value={setForm.subject} maxLength="100" onChange={(event) => setSetForm({ ...setForm, subject: event.target.value })} /></label></div>
-              <label>Visibility<select value={setForm.visibility} onChange={(event) => setSetForm({ ...setForm, visibility: event.target.value })}><option value="private">Private</option><option value="public">Public</option></select></label>
-              <p><button className="primary" type="submit">Create set</button></p>
-            </form></section>
-            <section className="card"><h2>Available study sets</h2>
-              {studySets.length === 0 ? <p>No study sets yet. Create the first one above.</p> : studySets.map((set) =>
-                <div className="set-row" key={set.studySetId}>
-                  <div><strong>{set.title}</strong><p>{set.visibility} · {set.ownerName} · {set.cardCount} flashcards</p>{set.description && <p>{set.description}</p>}</div>
-                  <div className="set-actions"><button onClick={() => openSet(set.studySetId)}>Open</button>
-                    <button onClick={() => toggleFavorite(set)}>{set.isFavorite ? "Unfavorite" : "Favorite"}</button></div>
-                </div>)}
+          {view === "bookmarks" && (
+            <section className="card">
+              <h1>Saved Questions</h1>
+              <p>Review questions you have bookmarked.</p>
+
+              {bookmarks.length === 0 ? (
+                <p>You haven't bookmarked any questions yet.</p>
+              ) : (
+                bookmarks.map((bookmark) => (
+                  <div
+                    className="question"
+                    key={bookmark.questionId}
+                  >
+                    <p className="eyebrow">
+                      {bookmark.quizTitle}
+                    </p>
+
+                    <h3>{bookmark.questionText}</h3>
+
+                    {bookmark.explanation && (
+                      <p>{bookmark.explanation}</p>
+                    )}
+
+
+<button
+                      type="button"
+                      onClick={() =>
+                        removeBookmark(bookmark.questionId)
+                      }
+                    >
+                      Remove Bookmark
+                    </button>
+                  </div>
+                ))
+              )}
             </section>
-            {selectedSet && <section className="card"><h2>{selectedSet.set.title}</h2>
-              <p>{selectedSet.set.visibility} · {selectedSet.set.ownerName}</p>
-              {selectedSet.set.ownerId === user.userId && <div className="form-row"><label htmlFor="set-visibility">Visibility</label>
-                <select id="set-visibility" value={selectedSet.set.visibility} onChange={(event) => changeVisibility(event.target.value)}><option value="private">Private</option><option value="public">Public</option></select></div>}
-              <h3>Flashcards</h3>
-              {selectedSet.cards.length === 0 ? <p>No flashcards yet.</p> : <div className="flashcard-grid">{selectedSet.cards.map((card) =>
-                <button className="flashcard" key={card.flashcardId} onClick={() => setFlippedSetCards({ ...flippedSetCards, [card.flashcardId]: !flippedSetCards[card.flashcardId] })}>{flippedSetCards[card.flashcardId] ? card.back : card.front}</button>)}</div>}
-              {selectedSet.set.ownerId === user.userId && <form onSubmit={addCard}><h3>Add a flashcard</h3>
-                <label>Front<input value={cardForm.front} maxLength="500" required onChange={(event) => setCardForm({ ...cardForm, front: event.target.value })} /></label>
-                <label>Back<textarea value={cardForm.back} maxLength="2000" required onChange={(event) => setCardForm({ ...cardForm, back: event.target.value })} /></label>
-                <button className="primary" type="submit">Save flashcard</button></form>}
-            </section>}
-          </>}
+          )}
+
 
           {view === "history" && <section className="card"><p className="eyebrow">YOUR PROGRESS / 03</p><h1>Quiz history</h1>
-            {history.length === 0 ? <p>No completed quizzes yet.</p> : history.map((attempt) => <div className="history-item" key={attempt.attemptId}>
-              <div><strong>{attempt.title}</strong><p>{attempt.difficulty} · {attempt.score}/{attempt.total} · {attempt.date}</p></div>
-              <button onClick={() => reviewAttempt(attempt.attemptId)}>Review answers</button>
-            </div>)}
-            {review && <div className="review"><h2>{review.attempt.title} · {review.score}/{review.total}</h2>
-              {review.questions.map((question, index) => <div className="question" key={index}>
-                <h3>{index + 1}. {question.questionText}</h3>
-                <p><strong>Your answer:</strong> {question.choices[question.selectedAnswerIndex]}</p>
-                <p><strong>Correct answer:</strong> {question.choices[question.correctAnswerIndex]}</p>
-                <p>{question.explanation}</p>
-              </div>)}</div>}
-          </section>}
+                {history.length === 0 ? <p>No completed quizzes yet.</p> : history.map((attempt) => <div className="history-item" key={attempt.attemptId}>
+                  <div><strong>{attempt.title}</strong><p>{attempt.difficulty} · {attempt.score}/{attempt.total} · {attempt.date}</p></div>
+                  <button onClick={() => reviewAttempt(attempt.attemptId)}>Review answers</button>
+                </div>)}
+                {review && <div className="review"><h2>{review.attempt.title} · {review.score}/{review.total}</h2>
+                  {review.questions.map((question, index) => <div className="question" key={index}>
+                    <h3>{index + 1}. {question.questionText}</h3>
+                    <p><strong>Your answer:</strong> {question.choices[question.selectedAnswerIndex]}</p>
+                    <p><strong>Correct answer:</strong> {question.choices[question.correctAnswerIndex]}</p>
+                    <p>{question.explanation}</p>
+                  </div>)}</div>}
+              </section>}
 
-          {view === "profile" && <div className="profile-grid"><section className="card"><p className="eyebrow">YOUR ACCOUNT / 04</p><h1>Your profile</h1>
-            <p><strong>Email:</strong> {user.email}<br /><strong>Role:</strong> {user.role}</p>
-            <form onSubmit={saveProfile}><label>Display name<input value={profileForm.displayName} onChange={(event) => setProfileForm({ ...profileForm, displayName: event.target.value })} required /></label>
-              <label>Bio<textarea value={profileForm.bio} onChange={(event) => setProfileForm({ ...profileForm, bio: event.target.value })} maxLength="1000" /></label>
-              <button className="primary">Save profile</button></form></section>
-            <section className="card"><h2>Change password</h2><form onSubmit={changePassword}>
-              <label>Current password<input type="password" value={passwordForm.currentPassword} onChange={(event) => setPasswordForm({ ...passwordForm, currentPassword: event.target.value })} required /></label>
-              <label>New password<input type="password" value={passwordForm.newPassword} onChange={(event) => setPasswordForm({ ...passwordForm, newPassword: event.target.value })} minLength="8" required /></label>
-              <button>Change password</button></form></section></div>}
+              {view === "profile" && <div className="profile-grid"><section className="card"><p className="eyebrow">YOUR ACCOUNT / 04</p><h1>Your profile</h1>
+                <p><strong>Email:</strong> {user.email}<br /><strong>Role:</strong> {user.role}</p>
+                <form onSubmit={saveProfile}><label>Display name<input value={profileForm.displayName} onChange={(event) => setProfileForm({ ...profileForm, displayName: event.target.value })} required /></label>
+                  <label>Bio<textarea value={profileForm.bio} onChange={(event) => setProfileForm({ ...profileForm, bio: event.target.value })} maxLength="1000" /></label>
+                  <button className="primary">Save profile</button></form></section>
+                <section className="card"><h2>Change password</h2><form onSubmit={changePassword}>
+                  <label>Current password<input type="password" value={passwordForm.currentPassword} onChange={(event) => setPasswordForm({ ...passwordForm, currentPassword: event.target.value })} required /></label>
+                  <label>New password<input type="password" value={passwordForm.newPassword} onChange={(event) => setPasswordForm({ ...passwordForm, newPassword: event.target.value })} minLength="8" required /></label>
+                  <button>Change password</button></form></section></div>}
 
-          {view === "admin" && user.role === "admin" && <section className="card"><h1>User management</h1>
-            {adminUsers.map((account) => <div className="admin-row" key={account.userId}>
-              <div><strong>{account.displayName}</strong><p>{account.email}</p></div>
-              <select aria-label={`Role for ${account.email}`} value={account.role} onChange={(event) => setAdminUsers(adminUsers.map((item) => item.userId === account.userId ? { ...item, role: event.target.value } : item))}>
-                <option value="student">Student</option><option value="admin">Admin</option></select>
-              <select aria-label={`Status for ${account.email}`} value={account.accountStatus} onChange={(event) => setAdminUsers(adminUsers.map((item) => item.userId === account.userId ? { ...item, accountStatus: event.target.value } : item))}>
-                <option value="active">Active</option><option value="suspended">Suspended</option></select>
-              <button onClick={() => updateAdminUser(account)}>Save</button>
-            </div>)}</section>}
-        </>
-      )}
+              {view === "admin" && user.role === "admin" && <section className="card"><h1>User management</h1>
+                {adminUsers.map((account) => <div className="admin-row" key={account.userId}>
+                  <div><strong>{account.displayName}</strong><p>{account.email}</p></div>
+                  <select aria-label={`Role for ${account.email}`} value={account.role} onChange={(event) => setAdminUsers(adminUsers.map((item) => item.userId === account.userId ? { ...item, role: event.target.value } : item))}>
+                    <option value="student">Student</option><option value="admin">Admin</option></select>
+                  <select aria-label={`Status for ${account.email}`} value={account.accountStatus} onChange={(event) => setAdminUsers(adminUsers.map((item) => item.userId === account.userId ? { ...item, accountStatus: event.target.value } : item))}>
+                    <option value="active">Active</option><option value="suspended">Suspended</option></select>
+                  <button onClick={() => updateAdminUser(account)}>Save</button>
+                </div>)}</section>}
+            </>
+          )}
         </main>
         <footer>QuizLink <span>·</span> CSC 4350 Group 6</footer>
       </div>
