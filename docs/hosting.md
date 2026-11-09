@@ -4,7 +4,9 @@ The root Dockerfile builds the React client and serves it with the Express API i
 
 ## Update the existing Render demo
 
-The existing service is [QuizLink](https://quizlink-r3vl.onrender.com/). To publish a later app change from `main`, select **Manual Deploy → Deploy latest commit**. Confirm the revision in Render, then open the site and check [API health](https://quizlink-r3vl.onrender.com/api/health). The Sprint 4 app revision is `4015c5f`.
+The existing service is [QuizLink](https://quizlink-r3vl.onrender.com/). To publish a later app change from `main`, select **Manual Deploy → Deploy latest commit**. Confirm the revision in Render, then open the site and check [API health](https://quizlink-r3vl.onrender.com/api/health).
+
+QuizLink migrates older SQLite databases at startup. On a host with persistent storage, take a backup before upgrading. A legacy answer that refers to the wrong quiz or question aborts the upgrade and leaves the old database intact.
 
 ## Free public demo on Render
 

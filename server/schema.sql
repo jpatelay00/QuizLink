@@ -40,6 +40,8 @@ CREATE TABLE IF NOT EXISTS study_files (
     mime_type TEXT NOT NULL,
     storage_key TEXT NOT NULL,
     extracted_text TEXT,
+    file_size INTEGER CHECK (file_size IS NULL OR (typeof(file_size) = 'integer' AND file_size BETWEEN 0 AND 60000)),
+    processing_status TEXT NOT NULL DEFAULT 'pending' CHECK (processing_status IN ('pending', 'completed', 'failed')),
     uploaded_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -91,14 +93,22 @@ CREATE TABLE IF NOT EXISTS quiz_attempts (
     score_percent REAL CHECK (score_percent BETWEEN 0 AND 100)
 );
 
+CREATE UNIQUE INDEX IF NOT EXISTS quiz_attempts_id_quiz ON quiz_attempts(attempt_id, quiz_id);
+CREATE UNIQUE INDEX IF NOT EXISTS questions_id_quiz ON questions(question_id, quiz_id);
+CREATE UNIQUE INDEX IF NOT EXISTS question_options_id_question ON question_options(option_id, question_id);
+
 CREATE TABLE IF NOT EXISTS attempt_answers (
-    attempt_id INTEGER NOT NULL REFERENCES quiz_attempts(attempt_id),
-    question_id INTEGER NOT NULL REFERENCES questions(question_id),
-    selected_option_id INTEGER REFERENCES question_options(option_id),
+    attempt_id INTEGER NOT NULL,
+    question_id INTEGER NOT NULL,
+    quiz_id INTEGER NOT NULL,
+    selected_option_id INTEGER,
     answer_text TEXT,
     is_correct INTEGER CHECK (is_correct IN (0, 1)),
     answered_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (attempt_id, question_id)
+    PRIMARY KEY (attempt_id, question_id),
+    FOREIGN KEY (attempt_id, quiz_id) REFERENCES quiz_attempts(attempt_id, quiz_id),
+    FOREIGN KEY (question_id, quiz_id) REFERENCES questions(question_id, quiz_id),
+    FOREIGN KEY (selected_option_id, question_id) REFERENCES question_options(option_id, question_id)
 );
 
 CREATE TABLE IF NOT EXISTS flashcards (

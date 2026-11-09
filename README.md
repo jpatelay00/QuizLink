@@ -13,7 +13,7 @@ Open **Practice** to paste notes or import a text file, then set the question fo
 - View public sets and your own private sets, and add accessible sets to your favorites.
 - Search public study sets by title, topic, subject, or description. Search requires a signed-in account and a query of 1-100 characters.
 - Read and post comments on public study sets. Administrators can hide and restore those comments.
-- Upload a `.txt` file containing 20-20,000 characters. The browser also limits the selected file to 60,000 bytes. The server stores its text and metadata in `study_files`, then returns the text to fill the quiz notes field.
+- Upload a `.txt` file containing 20–20,000 trimmed characters. The browser limits the selected file to 60,000 bytes. The API checks the UTF-8 byte size of the received text before trimming, saves the size and completed status in `study_files`, and returns the notes to the workshop.
 - Generate multiple-choice, fill-in-the-blank, or mixed quizzes from notes or uploaded text at easy, medium, or hard difficulty. Choose 1–20 questions, with at least two for mixed quizzes. A server-side Gemini key enables generation and on-demand hints.
 - Submit an answer for every quiz question and review saved attempts, scores, submitted answers, correct answers, and explanations.
 - Bookmark questions from your own generated quizzes, view them in **Saved**, and remove bookmarks. Duplicate user/question pairs are prevented.
@@ -21,7 +21,7 @@ Open **Practice** to paste notes or import a text file, then set the question fo
 
 ## Remaining work
 
-The Sprint 4 feature list includes plain-text uploads. PDF extraction, upload size and processing status, and database constraints tying answers to the correct question and quiz remain open.
+The Sprint 4 feature list includes plain-text uploads. PDF extraction remains future work.
 
 Generated flashcards appear after quiz submission. Save permanent flashcards in a study set.
 
@@ -83,13 +83,15 @@ npm --prefix client run lint
 npm --prefix client run build
 ```
 
-The integration suite uses in-memory SQLite and fixed Gemini responses. It covers account and study features, count and format validation, grading and history, hint access and caching, bookmarks, and admin comment moderation.
+The integration suite uses in-memory SQLite and fixed Gemini responses. It covers account and study features, upload metadata, count and format validation, grading and history, hint access and caching, bookmarks, and admin comment moderation. It also checks that SQLite rejects cross-quiz questions and cross-question options in saved answers.
+
+At startup, the database upgrade adds upload metadata and migrates existing answers to composite foreign keys in one transaction. Existing uploads keep their extracted text and record an unknown original size as NULL. A legacy answer with inconsistent references causes the migration to roll back so the database can be inspected before retrying.
 
 On November 9, the live deployment at commit `4015c5f` passed text import, generation and grading in all three formats, saved results, a hint, and a bookmark. Comment moderation passed locally with an admin account.
 
 ## Hosting
 
-The Sprint 4 build runs on [Render](https://quizlink-r3vl.onrender.com/) at commit [`4015c5f`](https://github.com/jpatelay00/QuizLink/commit/4015c5f05515380003a721dba8bc5aa670a2eaeb).
+The Sprint 4 demo runs on [Render](https://quizlink-r3vl.onrender.com/). The release includes a startup migration for upload metadata and saved answer relationships.
 
 The root Dockerfile builds the client and serves it with the Express API. The Render service deploys from `main`. Use disposable demo data because local SQLite storage on Render Free is erased on spin-down, restart, or redeploy.
 

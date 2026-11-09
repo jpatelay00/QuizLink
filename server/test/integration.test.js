@@ -250,6 +250,18 @@ test("registration, quiz persistence, history, sessions, and roles", async () =>
     const mixedReview = await request(`/api/quiz-attempts/${mixedResult.data.attemptId}`, owner);
     assert.equal(mixedReview.data.score, 2);
     assert.equal(mixedReview.data.questions[1].selectedText, "DEOXYRIBONUCLEIC   ACID");
+    const mixedQuestionId = mixed.data.questions[0].questionId;
+    const foreignOption = database.prepare(`
+      SELECT o.option_id, o.question_id FROM question_options o
+      JOIN questions q ON q.question_id = o.question_id WHERE q.quiz_id <> ? LIMIT 1
+    `).get(mixed.data.quizId);
+    assert.throws(() => database.prepare(`
+      INSERT INTO attempt_answers (attempt_id, question_id, quiz_id)
+      VALUES (?, ?, ?)
+    `).run(mixedResult.data.attemptId, foreignOption.question_id, mixed.data.quizId), /FOREIGN KEY constraint failed/);
+    assert.throws(() => database.prepare(`
+      UPDATE attempt_answers SET selected_option_id = ? WHERE attempt_id = ? AND question_id = ?
+    `).run(foreignOption.option_id, mixedResult.data.attemptId, mixedQuestionId), /FOREIGN KEY constraint failed/);
 
     const written = await generate({ questionType: "fill_blank", questionCount: 1 });
     assert.equal(written.status, 201);
@@ -266,11 +278,21 @@ test("registration, quiz persistence, history, sessions, and roles", async () =>
     assert.equal(wrongAnswer.status, 201);
     assert.equal(wrongAnswer.data.score, 0);
 
+    const uploadContent = `  ${notes} Café.\n`;
     const upload = await request("/api/study-files", {
-      ...owner, method: "POST", body: { filename: "biology.txt", content: notes }
+      ...owner, method: "POST", body: { filename: "biology.txt", content: uploadContent }
     });
     assert.equal(upload.status, 201);
-    assert.equal(upload.data.content, notes);
+    assert.equal(upload.data.content, uploadContent.trim());
+    assert.equal(upload.data.fileSize, Buffer.byteLength(uploadContent, "utf8"));
+    assert.equal(upload.data.processingStatus, "completed");
+    const retrieved = await request(`/api/study-files/${upload.data.fileId}`, owner);
+    assert.equal(retrieved.data.file.fileSize, upload.data.fileSize);
+    assert.equal(retrieved.data.file.processingStatus, "completed");
+    assert.equal((await request(`/api/study-files/${upload.data.fileId}`, { cookie: second.cookie })).status, 404);
+    assert.equal((await request("/api/study-files", {
+      ...owner, method: "POST", body: { filename: "biology.txt", content: notes.padEnd(60001) }
+    })).status, 400);
     assert.equal((await request("/api/study-files", {
       ...owner, method: "POST", body: { filename: "biology.pdf", content: notes }
     })).status, 400);

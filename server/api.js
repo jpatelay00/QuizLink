@@ -106,10 +106,12 @@ export function createApp(database = openDatabase(), quizGenerator = generateQui
         ? req.body.filename.trim()
         : "";
 
-    const content =
+    const rawContent =
       typeof req.body?.content === "string"
-        ? req.body.content.trim()
+        ? req.body.content
         : "";
+    const content = rawContent.trim();
+    const fileSize = Buffer.byteLength(rawContent, "utf8");
 
     if (
       !filename ||
@@ -126,6 +128,9 @@ export function createApp(database = openDatabase(), quizGenerator = generateQui
         error: "The file must contain 20 to 20,000 characters."
       });
     }
+    if (fileSize > 60000) {
+      return res.status(400).json({ error: "The selected file is too large." });
+    }
 
     const storageKey = `inline:${randomUUID()}`;
 
@@ -135,21 +140,26 @@ export function createApp(database = openDatabase(), quizGenerator = generateQui
         original_name,
         mime_type,
         storage_key,
-        extracted_text
+        extracted_text,
+        file_size,
+        processing_status
       )
-      VALUES (?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, 'completed')
     `).run(
       req.user.userId,
       filename,
       "text/plain",
       storageKey,
-      content
+      content,
+      fileSize
     );
 
     res.status(201).json({
       fileId: Number(result.lastInsertRowid),
       filename,
-      content
+      content,
+      fileSize,
+      processingStatus: "completed"
     });
   });
 
@@ -169,6 +179,8 @@ export function createApp(database = openDatabase(), quizGenerator = generateQui
         file_id AS fileId,
         original_name AS filename,
         extracted_text AS content,
+        file_size AS fileSize,
+        processing_status AS processingStatus,
         uploaded_at AS uploadedAt
       FROM study_files
       WHERE file_id = ?
@@ -644,9 +656,9 @@ export function createApp(database = openDatabase(), quizGenerator = generateQui
       const newId = Number(result.lastInsertRowid);
       for (const answer of answers) {
         database.prepare(`
-          INSERT INTO attempt_answers(attempt_id,question_id,selected_option_id,answer_text,is_correct)
-          VALUES (?,?,?,?,?)
-        `).run(newId, answer.questionId, answer.optionId, answer.answerText, answer.correct);
+          INSERT INTO attempt_answers(attempt_id,question_id,quiz_id,selected_option_id,answer_text,is_correct)
+          VALUES (?,?,?,?,?,?)
+        `).run(newId, answer.questionId, quizId, answer.optionId, answer.answerText, answer.correct);
       }
       return newId;
     });
