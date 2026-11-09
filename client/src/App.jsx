@@ -13,6 +13,22 @@ const navigation = [
   ["bookmarks", "Saved"], ["profile", "Account"], ["admin", "Admin"]
 ];
 
+const navPaths = {
+  quiz: "M4 5h16v14H4z M8 9h8 M8 13h5",
+  sets: "M4 5h6v14H4z M14 5h6v14h-6z M7 9h.1 M17 9h.1",
+  history: "M5 19h14 M7 15v-4 M12 15V7 M17 15v-7",
+  bookmarks: "M7 4h10v16l-5-3-5 3z",
+  profile: "M12 11a3 3 0 1 0 0-6 3 3 0 0 0 0 6z M6 19v-2a6 6 0 0 1 12 0v2",
+  admin: "M12 3l7 3v5c0 4-3 7-7 10-4-3-7-6-7-10V6z M9 12l2 2 4-4"
+};
+
+function NavIcon({ name }) {
+  return <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+    strokeWidth="1.65" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <path d={navPaths[name]} />
+  </svg>;
+}
+
 function AnswerReview({ question }) {
   const written = question.questionType === "fill_blank";
   return <article className="review-question">
@@ -521,20 +537,33 @@ function App() {
     <div className={`app ${user ? "app-authenticated" : "app-guest"}`}>
       <header className="masthead">
         <div className="masthead-inner">
-          <div className="brand-lockup"><span className="brand-mark" aria-hidden="true">Q.</span><strong>QuizLink</strong></div>
+          <div className="brand-lockup"><span className="brand-mark" aria-hidden="true"><NavIcon name="quiz" /></span><strong>QuizLink</strong></div>
           {user && <>
+            <span className="rail-label">Workspace</span>
             <nav aria-label="Main navigation">
               {navigation.filter(([key]) => key !== "admin" || user.role === "admin").map(([key, name]) =>
-                <button key={key} aria-current={view === key ? "page" : undefined} onClick={() => showView(key)}>{name}</button>
+                <button key={key} aria-current={view === key ? "page" : undefined} onClick={() => showView(key)}>
+                  <NavIcon name={key} /><span>{name}</span>
+                </button>
               )}
             </nav>
-            <div className="account-control"><span className="avatar" title={user.displayName} aria-hidden="true">{user.displayName.charAt(0).toUpperCase()}</span>
-              <button className="quiet" disabled={busy} onClick={logout}>Sign out</button></div>
+            <div className="account-control">
+              <span className="avatar" aria-hidden="true">{user.displayName.charAt(0).toUpperCase()}</span>
+              <div className="account-name">{user.displayName}</div>
+              <button className="quiet" disabled={busy} onClick={logout}>Sign out</button>
+            </div>
           </>}
-          {!user && <span className="issue-label">THE STUDY WORKSPACE</span>}
         </div>
       </header>
       <div className="main-column">
+        {user && <div className="workspace-bar">
+          <span>Workspace <b aria-hidden="true">/</b> <strong>{navigation.find(([key]) => key === view)?.[1]}</strong></span>
+          {view === "quiz" && <ol className="flow-steps" aria-label="Quiz workflow">
+            <li aria-current={!quiz ? "step" : undefined}><span>1</span> Build</li>
+            <li aria-current={quiz && !result ? "step" : undefined}><span>2</span> Practice</li>
+            <li aria-current={result ? "step" : undefined}><span>3</span> Review</li>
+          </ol>}
+        </div>}
         <main className="content">
 
           {error && <p role="alert" className="alert error">{error}</p>}
@@ -542,19 +571,9 @@ function App() {
 
           {!user ? (
             <div className="welcome-grid">
-              <section className="welcome-panel" aria-labelledby="welcome-heading">
-                <p className="eyebrow"><span className="index-square">01</span> FROM NOTES TO RECALL</p>
-                <h1 id="welcome-heading">Practice what<br />you <em>study.</em></h1>
-                <p>Turn your own notes into a quiz. Save the questions worth revisiting and see what you know next time.</p>
-                <div className="paper-demo" aria-hidden="true">
-                  <div className="demo-notes"><span>01 / CLASS NOTES</span><strong>Cell biology</strong><i /><i /><i /></div>
-                  <span className="demo-arrow">→</span>
-                  <div className="demo-question"><span>02 / PRACTICE</span><strong>Where is DNA stored?</strong><div><b>A</b> Nucleus <span>✓</span></div></div>
-                </div>
-              </section>
               <section className="card auth-card">
-                <p className="eyebrow">YOUR ACCOUNT</p>
-                <h2>{authMode === "register" ? "Create an account" : "Sign in to QuizLink"}</h2>
+                <h1>{authMode === "register" ? "Create an account" : "Sign in to QuizLink"}</h1>
+                <p>Open your study sets, quizzes, and saved questions.</p>
                 <div className="auth-tabs">
                   <button aria-pressed={authMode === "login"} onClick={() => { setAuthMode("login"); setError(""); }}>Sign in</button>
                   <button aria-pressed={authMode === "register"} onClick={() => { setAuthMode("register"); setError(""); }}>Create account</button>
@@ -566,19 +585,32 @@ function App() {
                   <button type="submit" className="primary" disabled={busy}>{busy ? "Please wait…" : authMode === "register" ? "Create account" : "Log in"}</button>
                 </form>
               </section>
+              <aside className="sample-sheet" aria-label="Example quiz from study notes">
+                <div className="sample-top"><NavIcon name="quiz" /><span>Sample worksheet</span></div>
+                <div className="sample-body">
+                  <p className="sample-label">SOURCE NOTES</p>
+                  <h2>Cell biology</h2>
+                  <p>Eukaryotic cells keep their chromosomes in the nucleus. Ribosomes build proteins.</p>
+                  <div className="sample-divider"><span>↓</span> From notes to a question</div>
+                  <p className="sample-label">QUESTION 01</p>
+                  <h3>Which structure stores chromosomes?</h3>
+                  <div className="sample-choice sample-correct"><b>A</b> Nucleus <span>✓</span></div>
+                  <div className="sample-choice"><b>B</b> Ribosome</div>
+                </div>
+              </aside>
             </div>
           ) : (
 
             <>
               {view === "quiz" && <>
                 <section className="page-heading practice-heading">
-                  <div><p className="eyebrow">01 / PRACTICE</p><h1>Quiz workshop</h1><p>Start with a page of notes. Choose how you want to be tested.</p></div>
+                  <div><h1>{quiz ? (result ? "Quiz review" : "Practice session") : "Quiz workshop"}</h1><p>{quiz ? (result ? "Check your answers and see what to revisit." : "Answer each question, then submit to see your score.") : "Paste or import notes, then set up a quiz."}</p></div>
                   <button className="quiet history-link" onClick={() => showView("history")}>Results <span>{history.length}</span> ↗</button>
                 </section>
 
                 {!quiz && <form className="work-grid" onSubmit={generateQuiz}>
                   <section className="card notes-panel">
-                    <div className="panel-bar"><span><span className="index-square">01</span> Source material</span>
+                    <div className="panel-bar"><span><NavIcon name="sets" /> Study notes</span>
                       <label className="upload-button">Import .txt
                         <input type="file" accept=".txt,text/plain" onChange={uploadStudyFile} disabled={busy} aria-label="Import text file" />
                       </label>
@@ -589,7 +621,7 @@ function App() {
                     <div className="editor-footer"><span>20 characters minimum</span><span>{notes.length.toLocaleString()} / 20,000</span></div>
                   </section>
                   <section className="card setup-panel">
-                    <div className="panel-bar"><span><span className="index-square">02</span> Quiz settings</span></div>
+                    <div className="panel-bar"><span><NavIcon name="quiz" /> Quiz settings</span></div>
                     <div className="setup-body">
                       <label htmlFor="quiz-format">Question format</label>
                       <select id="quiz-format" value={questionType} onChange={(event) => {
@@ -668,7 +700,7 @@ function App() {
               </>}
 
               {view === "sets" && <>
-                <section className="page-heading"><div><p className="eyebrow">YOUR LIBRARY / 02</p><h1>Study library</h1><p>Organize flashcards in your own sets or find material shared by classmates.</p></div><div className="heading-stat"><strong>{studySets.filter((set) => set.ownerId === user.userId).length}</strong><span>your {studySets.filter((set) => set.ownerId === user.userId).length === 1 ? "set" : "sets"}</span></div></section>
+                <section className="page-heading"><div><h1>Study library</h1><p>Organize flashcards in your own sets or find material shared by classmates.</p></div><div className="heading-stat"><strong>{studySets.filter((set) => set.ownerId === user.userId).length}</strong><span>your {studySets.filter((set) => set.ownerId === user.userId).length === 1 ? "set" : "sets"}</span></div></section>
 
                 <section className="card">
                   <h2>Search Public Study Sets</h2>
@@ -857,7 +889,7 @@ function App() {
           )}
 
 
-          {view === "history" && <section className="card"><p className="eyebrow">YOUR PROGRESS / 03</p><h1>Quiz history</h1>
+          {view === "history" && <section className="card"><h1>Quiz history</h1>
                 {history.length === 0 ? <p>No completed quizzes yet.</p> : history.map((attempt) => <div className="history-item" key={attempt.attemptId}>
                   <div><strong>{attempt.title}</strong><p>{attempt.difficulty} · {attempt.score}/{attempt.total} · {attempt.date}</p></div>
                   <button onClick={() => reviewAttempt(attempt.attemptId)}>Review answers</button>
@@ -866,7 +898,7 @@ function App() {
                   {review.questions.map((item) => <AnswerReview key={item.questionId} question={item} />)}</div>}
               </section>}
 
-              {view === "profile" && <div className="profile-grid"><section className="card"><p className="eyebrow">YOUR ACCOUNT / 04</p><h1>Your profile</h1>
+              {view === "profile" && <div className="profile-grid"><section className="card"><h1>Your profile</h1>
                 <p><strong>Email:</strong> {user.email}<br /><strong>Role:</strong> {user.role}</p>
                 <form onSubmit={saveProfile}><label>Display name<input value={profileForm.displayName} onChange={(event) => setProfileForm({ ...profileForm, displayName: event.target.value })} required /></label>
                   <label>Bio<textarea value={profileForm.bio} onChange={(event) => setProfileForm({ ...profileForm, bio: event.target.value })} maxLength="1000" /></label>

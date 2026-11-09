@@ -62,8 +62,10 @@ Answer to avoid revealing: ${correctAnswer}`
   return response.text;
 }
 
+export class GeminiConfigurationError extends Error {}
+
 function createGeminiClient() {
   const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) throw new Error("Quiz generation and hints require a Gemini API key on the server.");
+  if (!apiKey?.trim()) throw new GeminiConfigurationError("The Gemini key is missing.");
   return new GoogleGenAI({ apiKey });
 }

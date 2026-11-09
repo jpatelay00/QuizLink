@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { once } from "node:events";
 import { createApp } from "../api.js";
 import { openDatabase } from "../db.js";
+import { GeminiConfigurationError } from "../quiz.js";
 
 const testQuiz = {
   title: "Cell Biology", summary: "Questions about cell structures.",
@@ -16,15 +17,22 @@ const testQuiz = {
 test("registration, quiz persistence, history, sessions, and roles", async () => {
   const database = openDatabase(":memory:");
   let hintCalls = 0;
-  const app = createApp(database, async (_notes, _difficulty, settings) => ({
-    data: settings.questionType === "mixed" ? {
-      ...testQuiz, questions: [testQuiz.questions[0], {
-        questionType: "fill_blank", questionText: "DNA means ___.", explanation: "DNA is the genetic material.",
-        correctText: "Deoxyribonucleic acid"
-      }]
-    } : testQuiz
-  }), async () => {
+  let hintFailure = false;
+  const writtenQuestion = {
+    questionType: "fill_blank", questionText: "DNA means ___.", explanation: "DNA is the genetic material.",
+    correctText: "Deoxyribonucleic acid"
+  };
+  const app = createApp(database, async (notes, _difficulty, settings) => {
+    if (notes.startsWith("Configuration failure")) throw new GeminiConfigurationError("No key");
+    const questions = {
+      mixed: [testQuiz.questions[0], writtenQuestion],
+      fill_blank: [writtenQuestion],
+      multiple_choice: testQuiz.questions
+    }[settings.questionType];
+    return { data: { ...testQuiz, questions } };
+  }, async () => {
     hintCalls++;
+    if (hintFailure) throw new Error("Provider unavailable");
     return "Think about where the genetic material is kept.";
   });
   const server = app.listen(0, "127.0.0.1");
@@ -217,7 +225,12 @@ test("registration, quiz persistence, history, sessions, and roles", async () =>
     const generate = (options) => request("/api/generate-quiz", {
       ...owner, method: "POST", body: { notes, difficulty: "medium", ...options }
     });
-    assert.equal((await generate({ questionCount: 21 })).status, 400);
+    for (const questionCount of [0, 1.5, "2", 21]) {
+      assert.equal((await generate({ questionCount })).status, 400);
+    }
+    const unavailable = await generate({ notes: "Configuration failure in test fixture" });
+    assert.equal(unavailable.status, 503);
+    assert.match(unavailable.data.error, /needs a Gemini API key/);
     assert.equal((await generate({ questionType: "mixed", questionCount: 1 })).status, 400);
     assert.equal((await generate({ questionCount: 2 })).status, 503);
     assert.equal(database.prepare("SELECT count(*) AS count FROM quizzes").get().count, 1);
@@ -237,6 +250,30 @@ test("registration, quiz persistence, history, sessions, and roles", async () =>
     const mixedReview = await request(`/api/quiz-attempts/${mixedResult.data.attemptId}`, owner);
     assert.equal(mixedReview.data.score, 2);
     assert.equal(mixedReview.data.questions[1].selectedText, "DEOXYRIBONUCLEIC   ACID");
+
+    const written = await generate({ questionType: "fill_blank", questionCount: 1 });
+    assert.equal(written.status, 201);
+    assert.equal(written.data.questions.length, 1);
+    assert.deepEqual(written.data.questions[0].choices, []);
+    const writtenHint = `/api/questions/${written.data.questions[0].questionId}/hint`;
+    hintFailure = true;
+    assert.equal((await request(writtenHint, { ...owner, method: "POST" })).status, 503);
+    hintFailure = false;
+    assert.equal((await request(writtenHint, { ...owner, method: "POST" })).status, 200);
+    const wrongAnswer = await request("/api/quiz-attempts", {
+      ...owner, method: "POST", body: { quizId: written.data.quizId, answers: ["An incorrect expansion"] }
+    });
+    assert.equal(wrongAnswer.status, 201);
+    assert.equal(wrongAnswer.data.score, 0);
+
+    const upload = await request("/api/study-files", {
+      ...owner, method: "POST", body: { filename: "biology.txt", content: notes }
+    });
+    assert.equal(upload.status, 201);
+    assert.equal(upload.data.content, notes);
+    assert.equal((await request("/api/study-files", {
+      ...owner, method: "POST", body: { filename: "biology.pdf", content: notes }
+    })).status, 400);
 
     const privateSet = await request("/api/study-sets", {
       method: "POST", cookie: ownerCookie, csrfToken: ownerCsrf,

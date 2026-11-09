@@ -4,7 +4,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { openDatabase, transaction, utcTimestamp } from "./db.js";
 import { createAuth, hashPassword, verifyPassword } from "./auth.js";
-import { generateQuestionHint, generateQuizData, normalizeAnswer, questionTypes, validateQuiz } from "./quiz.js";
+import { GeminiConfigurationError, generateQuestionHint, generateQuizData, normalizeAnswer, questionTypes, validateQuiz } from "./quiz.js";
 import { randomUUID } from "node:crypto";
 
 const validEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -207,8 +207,11 @@ export function createApp(database = openDatabase(), quizGenerator = generateQui
     try {
       ({ data } = await quizGenerator(notes, difficulty, settings));
       if (!validateQuiz(data, settings)) throw new Error("Invalid quiz response");
-    } catch {
-      return res.status(503).json({ error: "Could not generate a valid quiz. Check Gemini configuration or try again." });
+    } catch (error) {
+      const message = error instanceof GeminiConfigurationError
+        ? "Quiz generation is unavailable. This deployment needs a Gemini API key."
+        : "Could not generate a valid quiz. Try again or adjust your notes.";
+      return res.status(503).json({ error: message });
     }
     const saved = transaction(database, () => {
       const quizId = Number(database.prepare(`
