@@ -24,6 +24,9 @@ test("registration, quiz persistence, history, sessions, and roles", async () =>
   };
   const app = createApp(database, async (notes, _difficulty, settings) => {
     if (notes.startsWith("Configuration failure")) throw new GeminiConfigurationError("No key");
+    if (notes.startsWith("Wrong format")) {
+      return { data: { ...testQuiz, questions: testQuiz.questions.slice(0, settings.questionCount) } };
+    }
     const questions = {
       mixed: [testQuiz.questions[0], writtenQuestion],
       fill_blank: [writtenQuestion],
@@ -228,12 +231,22 @@ test("registration, quiz persistence, history, sessions, and roles", async () =>
     for (const questionCount of [0, 1.5, "2", 21]) {
       assert.equal((await generate({ questionCount })).status, 400);
     }
+    assert.equal((await generate({ questionType: "short_answer", questionCount: 2 })).status, 400);
     const unavailable = await generate({ notes: "Configuration failure in test fixture" });
     assert.equal(unavailable.status, 503);
     assert.match(unavailable.data.error, /needs a Gemini API key/);
     assert.equal((await generate({ questionType: "mixed", questionCount: 1 })).status, 400);
+    const quizRows = database.prepare(`
+      SELECT (SELECT count(*) FROM quizzes) AS quizzes,
+             (SELECT count(*) FROM questions) AS questions,
+             (SELECT count(*) FROM question_options) AS options
+    `);
+    const beforeRejectedResponses = quizRows.get();
     assert.equal((await generate({ questionCount: 2 })).status, 503);
-    assert.equal(database.prepare("SELECT count(*) AS count FROM quizzes").get().count, 1);
+    assert.equal((await generate({
+      notes: "Wrong format returned by the quiz generator.", questionType: "mixed", questionCount: 2
+    })).status, 503);
+    assert.deepEqual(quizRows.get(), beforeRejectedResponses);
     const mixed = await generate({ questionType: "mixed", questionCount: 2 });
     assert.equal(mixed.status, 201);
     assert.equal(mixed.data.questions[1].questionType, "fill_blank");

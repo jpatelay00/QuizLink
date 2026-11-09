@@ -1,6 +1,7 @@
 {
   "name": "quizlink-server",
   "version": "1.0.0",
+  "private": true,
   "description": "QuizLink API and database",
   "type": "module",
   "main": "server.js",
@@ -10,8 +11,6 @@
     "test": "node --test",
     "promote": "node admin.js"
   },
-  "keywords": [],
-  "author": "",
   "license": "ISC",
   "dependencies": {
     "@google/genai": "^2.16.0",
