@@ -89,7 +89,7 @@ The integration suite uses in-memory SQLite and fixed Gemini responses. It cover
 
 At startup, the database upgrade adds upload metadata and migrates existing answers to composite foreign keys in one transaction. Existing uploads keep their extracted text and record an unknown original size as NULL. A legacy answer with inconsistent references causes the migration to roll back so the database can be inspected before retrying.
 
-On November 9, the Railway deployment passed live checks for account and study features, text import, all three quiz formats, grading and saved results, hints, bookmarks, and public comments. Administrator comment moderation passed in the local integration suite. All three difficulty settings and the 20-question limit passed locally with controlled Gemini responses. Gemini rate limiting blocked the live hard 20-question check.
+On November 9, the Railway deployment passed live checks for account and study features, text import, all three quiz formats, grading and saved results, hints, bookmarks, and public comments. Administrator comment moderation passed in the local integration suite. All three difficulty settings passed locally with controlled Gemini responses. On Railway, a hard 20-question quiz generated, graded, and reopened successfully after an earlier Gemini rate limit.
 
 ## Hosting
 
