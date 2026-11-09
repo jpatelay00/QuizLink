@@ -4,7 +4,7 @@ The root Dockerfile builds the React client and serves it with the Express API i
 
 ## Update the existing Render demo
 
-The existing service is [QuizLink](https://quizlink-r3vl.onrender.com/). After the Sprint 4 changes reach `main`, open the service in Render and select **Manual Deploy → Deploy latest commit**. Confirm the deploy shows the expected GitHub revision, then check [API health](https://quizlink-r3vl.onrender.com/api/health) and look for the new **Practice what you study** sign-in screen.
+The existing service is [QuizLink](https://quizlink-r3vl.onrender.com/). To publish a later app change from `main`, select **Manual Deploy → Deploy latest commit**. Confirm the revision in Render, then open the site and check [API health](https://quizlink-r3vl.onrender.com/api/health). The Sprint 4 app revision is `4015c5f`.
 
 ## Free public demo on Render
 
@@ -37,9 +37,26 @@ Oracle Cloud offers Always Free compute and block storage in eligible home regio
 
 On Railway, attach a volume at `/data`. QuizLink uses `RAILWAY_VOLUME_MOUNT_PATH` by default on Railway and requires a volume there. [Railway volumes](https://docs.railway.com/volumes)
 
-## Demo checks
+## Presentation demo
 
-- Confirm the deployed revision matches the intended Sprint 4 branch. Verify `/api/health` before opening the site.
-- Sign in, import a `.txt` file, choose **Mixed** with two or more questions, generate a quiz, request a hint, submit both answer formats, and reopen the attempt in **Results**.
-- Verify new study sets default to private. To show moderation, open a public study set as an admin and hide or restore a comment.
-- With persistent storage, restart the app and reopen a saved attempt. For an ephemeral host, be ready to recreate the demo account and data.
+Open the [live site](https://quizlink-r3vl.onrender.com/) before class so the free instance has time to start. Sign in to a demo account and create one if the database has reset.
+
+1. In **Practice**, paste the notes below or import them from a `.txt` file.
+2. Choose **Mixed**, **Medium**, and **2** questions. Build the quiz.
+3. Request a hint, bookmark a question, and answer both questions.
+4. Submit the quiz. Open the attempt in **Results** and the bookmark in **Saved**.
+
+```text
+Eukaryotic cells keep chromosomes in the nucleus. Ribosomes build proteins.
+The cell membrane regulates movement into and out of the cell.
+Mitochondria produce ATP for cell activities. Chloroplasts carry out photosynthesis in plants.
+Cytoplasm is the material within the cell membrane outside the nucleus.
+```
+
+To show the database design, open `server/schema.sql`. If the local demo database is available, list its tables from the repository root:
+
+```sh
+sqlite3 -readonly server/data/quizlink-demo.db ".tables"
+```
+
+The local demo database uses the same schema as the live service and has its own data. Admin comment moderation was verified locally. Demonstrate it with a local admin account if you need to show that workflow.

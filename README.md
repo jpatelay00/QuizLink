@@ -1,6 +1,6 @@
 # QuizLink
 
-QuizLink is a study workspace for organizing material, creating flashcards, generating practice quizzes, and reviewing saved attempts. It uses a React/Vite client, a Node.js/Express API, and a persistent SQLite database.
+QuizLink is a study workspace for organizing material, creating flashcards, generating practice quizzes, and reviewing saved attempts. It uses a React/Vite client, a Node.js/Express API, and a SQLite database.
 
 ## Sprint 4
 
@@ -19,11 +19,11 @@ Open **Practice** to paste notes or import a text file, then set the question fo
 - Bookmark questions from your own generated quizzes, view them in **Saved**, and remove bookmarks. Duplicate user/question pairs are prevented.
 - Administrators can manage account roles and suspend accounts through the administrator view.
 
-## Design targets not yet implemented
+## Remaining work
 
-Uploads support plain text. PDF extraction is still a design target.
+The Sprint 4 feature list includes plain-text uploads. PDF extraction, upload size and processing status, and database constraints tying answers to the correct question and quiz remain open.
 
-Open database work includes upload size and processing status, plus database-level checks that tie each answer to the correct question and quiz. Generated flashcards appear after quiz submission. Save permanent flashcards separately in a study set.
+Generated flashcards appear after quiz submission. Save permanent flashcards in a study set.
 
 ## Requirements
 
@@ -67,10 +67,12 @@ For local configuration, copy `server/.env.example` to `server/.env`. The npm se
 | `QUIZLINK_DB` | Optional writable SQLite file path. Defaults to `server/data/quizlink.db` locally. |
 | `QUIZLINK_SECURE_COOKIES` | Set to `1` for HTTPS hosting; leave unset for local HTTP development. |
 
-No administrator account is created by default. Register an account, then promote that account on the same database using its actual email address:
+To give an existing local account admin access, run this from the repository root and enter the account email when prompted. Use the same database as the running app.
 
 ```sh
-npm --prefix server run promote -- your-registered-email
+printf "Registered account email: "
+read -r quizlink_admin_email
+npm --prefix server run promote -- "$quizlink_admin_email"
 ```
 
 ## Verification
@@ -81,13 +83,15 @@ npm --prefix client run lint
 npm --prefix client run build
 ```
 
-The integration suite exercises quiz format and count validation, mixed-format scoring and history, cached hints and access checks, private defaults, and administrator comment moderation alongside the existing account and study features. It uses in-memory SQLite and fixed Gemini responses. Check live Gemini generation and hints separately using your configured key.
+The integration suite uses in-memory SQLite and fixed Gemini responses. It covers account and study features, count and format validation, grading and history, hint access and caching, bookmarks, and admin comment moderation.
+
+On November 9, the live deployment at commit `4015c5f` passed text import, generation and grading in all three formats, saved results, a hint, and a bookmark. Comment moderation passed locally with an admin account.
 
 ## Hosting
 
-The public demo runs on [Render](https://quizlink-r3vl.onrender.com/). Check the deployed commit in Render before using it to demonstrate Sprint 4.
+The Sprint 4 build runs on [Render](https://quizlink-r3vl.onrender.com/) at commit [`4015c5f`](https://github.com/jpatelay00/QuizLink/commit/4015c5f05515380003a721dba8bc5aa670a2eaeb).
 
-The root Dockerfile builds the client and serves it with the Express API. For a free public demo, deploy the Sprint 4 branch as a Docker Web Service on Render Free and use disposable demo data. Render Free resets local SQLite data after spin-down, restart, or redeploy. A Cloudflare Quick Tunnel can also share your local demo over HTTPS while keeping SQLite on your computer.
+The root Dockerfile builds the client and serves it with the Express API. The Render service deploys from `main`. Use disposable demo data because local SQLite storage on Render Free is erased on spin-down, restart, or redeploy.
 
 See [Hosting QuizLink](docs/hosting.md) for setup, persistence options, and demo checks.
 
