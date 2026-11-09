@@ -64,6 +64,7 @@ function App() {
   const [activeQuestion, setActiveQuestion] = useState(0);
   const [hints, setHints] = useState({});
   const [quiz, setQuiz] = useState(null);
+  const [quizSetId, setQuizSetId] = useState("");
   const [selectedAnswers, setSelectedAnswers] = useState({});
   const [result, setResult] = useState(null);
   const [flippedCards, setFlippedCards] = useState({});
@@ -98,7 +99,9 @@ function App() {
   }, []);
 
   useEffect(() => {
-    if (user) api("/api/quiz-attempts").then((data) => setHistory(data.attempts)).catch(() => { });
+    if (!user) return;
+    api("/api/quiz-attempts").then((data) => setHistory(data.attempts)).catch(() => { });
+    api("/api/study-sets").then((data) => setStudySets(data.sets)).catch(() => { });
   }, [user]);
 
 
@@ -398,6 +401,48 @@ function App() {
   }
 
 
+  function startQuiz(data) {
+    setQuiz(data);
+    setQuizSetId(data.studySetId ? String(data.studySetId) : "");
+    setResult(null);
+    setSelectedAnswers({});
+    setActiveQuestion(0);
+    setHints({});
+    setFlippedCards({});
+    setView("quiz");
+  }
+
+  async function openQuiz(quizId) {
+    setError("");
+    setMessage("");
+    setBusy(true);
+    try {
+      startQuiz(await api(`/api/quizzes/${quizId}`));
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function saveQuizToSet(event) {
+    event.preventDefault();
+    setError("");
+    setMessage("");
+    setBusy(true);
+    try {
+      const { studySetId } = await api(`/api/quizzes/${quiz.quizId}/study-set`, {
+        method: "PUT", body: { studySetId: Number(quizSetId) }, csrfToken
+      });
+      setQuiz({ ...quiz, studySetId });
+      setMessage("Quiz saved to the study set.");
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function generateQuiz(event) {
     event.preventDefault();
     setError("");
@@ -407,12 +452,7 @@ function App() {
       const data = await api("/api/generate-quiz", {
         method: "POST", body: { notes, difficulty, questionType, questionCount: Number(questionCount) }, csrfToken,
       });
-      setQuiz(data);
-      setResult(null);
-      setSelectedAnswers({});
-      setActiveQuestion(0);
-      setHints({});
-      setFlippedCards({});
+      startQuiz(data);
     } catch (err) {
       setError(err.message);
     } finally {
@@ -525,6 +565,7 @@ function App() {
   if (checkingSession) return <main className="loading-screen"><span className="brand-mark">Q</span><p>Opening your workspace…</p></main>;
 
   const question = quiz?.questions[activeQuestion];
+  const ownedSets = studySets.filter((set) => set.ownerId === user?.userId);
   const hint = question && hints[question.questionId];
   const bookmarked = question && bookmarks.some((item) => item.questionId === question.questionId);
   const isAnswered = (index) => {
@@ -650,6 +691,19 @@ function App() {
                 {quiz && <section className="card practice-sheet">
                   <div className="sheet-header"><div><p className="eyebrow">{formats[quiz.questionType]} / {quiz.difficulty}</p><h2>{quiz.title}</h2></div>
                     <button className="quiet" disabled={busy} onClick={() => { setQuiz(null); setResult(null); }}>New quiz</button></div>
+                  {quiz.canEdit && (ownedSets.length ? (
+                    <form onSubmit={saveQuizToSet}>
+                      <label>Study set<select value={quizSetId} onChange={(event) => setQuizSetId(event.target.value)}>
+                        <option value="">Choose a study set</option>
+                        {ownedSets.map((set) => <option key={set.studySetId} value={set.studySetId}>{set.title} ({set.visibility})</option>)}
+                      </select></label>
+                      {ownedSets.some((set) => String(set.studySetId) === quizSetId && set.visibility === "public") &&
+                        <p className="field-note">Other learners can take quizzes in public study sets.</p>}
+                      <button type="submit" disabled={busy || !quizSetId || Number(quizSetId) === quiz.studySetId}>
+                        {quiz.studySetId && Number(quizSetId) === quiz.studySetId ? "Saved to study set" : "Save to study set"}
+                      </button>
+                    </form>
+                  ) : <p>Create a study set in Library, then return here to save this quiz.</p>)}
                   {result ? <>
                     <div className="score-banner"><span>QUIZ COMPLETE</span><strong>{result.score} / {result.total}</strong><span>correct</span></div>
                     {result.questions.map((item) => <AnswerReview key={item.questionId} question={item} />)}
@@ -700,7 +754,7 @@ function App() {
               </>}
 
               {view === "sets" && <>
-                <section className="page-heading"><div><h1>Study library</h1><p>Organize flashcards in your own sets or find material shared by classmates.</p></div><div className="heading-stat"><strong>{studySets.filter((set) => set.ownerId === user.userId).length}</strong><span>your {studySets.filter((set) => set.ownerId === user.userId).length === 1 ? "set" : "sets"}</span></div></section>
+                <section className="page-heading"><div><h1>Study library</h1><p>Organize quizzes and flashcards or find material shared by classmates.</p></div><div className="heading-stat"><strong>{ownedSets.length}</strong><span>your {ownedSets.length === 1 ? "set" : "sets"}</span></div></section>
 
                 <section className="card">
                   <h2>Search Public Study Sets</h2>
@@ -787,6 +841,12 @@ function App() {
                   <p>{selectedSet.set.visibility} · {selectedSet.set.ownerName}</p>
                   {selectedSet.set.ownerId === user.userId && <div className="form-row"><label htmlFor="set-visibility">Visibility</label>
                     <select id="set-visibility" value={selectedSet.set.visibility} onChange={(event) => changeVisibility(event.target.value)}><option value="private">Private</option><option value="public">Public</option></select></div>}
+                  <h3>Quizzes</h3>
+                  {selectedSet.quizzes.length === 0 ? <p>No quizzes yet.</p> : selectedSet.quizzes.map((savedQuiz) =>
+                    <div className="set-row" key={savedQuiz.quizId}>
+                      <div><strong>{savedQuiz.title}</strong><p>{formats[savedQuiz.questionType]} · {savedQuiz.difficulty} · {savedQuiz.questionCount} {savedQuiz.questionCount === 1 ? "question" : "questions"}</p></div>
+                      <button disabled={busy} onClick={() => openQuiz(savedQuiz.quizId)}>Take quiz</button>
+                    </div>)}
                   <h3>Flashcards</h3>
                   {selectedSet.cards.length === 0 ? <p>No flashcards yet.</p> : <div className="flashcard-grid">{selectedSet.cards.map((card) =>
                     <button className="flashcard" key={card.flashcardId} onClick={() => setFlippedSetCards({ ...flippedSetCards, [card.flashcardId]: !flippedSetCards[card.flashcardId] })}>{flippedSetCards[card.flashcardId] ? card.back : card.front}</button>)}</div>}
@@ -892,7 +952,11 @@ function App() {
           {view === "history" && <section className="card"><h1>Quiz history</h1>
                 {history.length === 0 ? <p>No completed quizzes yet.</p> : history.map((attempt) => <div className="history-item" key={attempt.attemptId}>
                   <div><strong>{attempt.title}</strong><p>{attempt.difficulty} · {attempt.score}/{attempt.total} · {attempt.date}</p></div>
-                  <button onClick={() => reviewAttempt(attempt.attemptId)}>Review answers</button>
+                  <div className="set-actions">
+                    <button onClick={() => reviewAttempt(attempt.attemptId)}>Review answers</button>
+                    {Boolean(attempt.canRetake) &&
+                      <button disabled={busy} onClick={() => openQuiz(attempt.quizId)}>Take again</button>}
+                  </div>
                 </div>)}
                 {review && <div className="review"><h2>{review.attempt.title} · {review.score}/{review.total}</h2>
                   {review.questions.map((item) => <AnswerReview key={item.questionId} question={item} />)}</div>}

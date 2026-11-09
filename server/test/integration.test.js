@@ -329,10 +329,45 @@ test("registration, quiz persistence, history, sessions, and roles", async () =>
     assert.equal((await request(`/api/study-sets/${setId}`, { cookie: second.cookie })).status, 404);
     assert.equal((await request(`/api/study-sets/${setId}`, { cookie: ownerCookie })).data.set.visibility, "private");
     assert.equal((await request(`/api/study-sets/${setId}`, { cookie: second.cookie })).status, 404);
+    const quizPath = `/api/quizzes/${quizId}`;
+    const attach = (session, studySetId) => request(`${quizPath}/study-set`, {
+      ...session, method: "PUT", body: { studySetId }
+    });
+    const otherSet = await request("/api/study-sets", {
+      ...other, method: "POST", body: { title: "Someone else's set", visibility: "public" }
+    });
+    assert.equal(otherSet.status, 201);
+    assert.equal((await attach(owner, otherSet.data.studySetId)).status, 404);
+    assert.equal((await attach({ cookie: ownerCookie }, setId)).status, 403);
+    assert.equal((await attach(owner, setId)).status, 200);
+    assert.equal((await attach(owner, setId)).status, 200);
+    assert.equal((await request(`/api/study-sets/${setId}`, owner)).data.quizzes[0].quizId, quizId);
+    assert.equal((await request(quizPath, owner)).data.studySetId, setId);
+    assert.equal((await request(quizPath, other)).status, 404);
     assert.equal((await request(`/api/study-sets/${setId}`, {
       method: "PATCH", cookie: ownerCookie, csrfToken: ownerCsrf, body: { visibility: "public" }
     })).status, 200);
     assert.equal((await request(`/api/study-sets/${setId}`, { cookie: second.cookie })).status, 200);
+    const shared = await request(quizPath, other);
+    assert.equal(shared.status, 200);
+    assert.equal(shared.data.canEdit, false);
+    assert.equal(shared.data.source_text, undefined);
+    assert.deepEqual(shared.data.questions[0], generated.data.questions[0]);
+    assert.equal((await attach(other, otherSet.data.studySetId)).status, 404);
+    assert.equal((await request(hintPath, { ...other, method: "POST" })).status, 200);
+    assert.equal((await request(`/api/question-bookmarks/${questionId}`, {
+      ...other, method: "PUT"
+    })).status, 200);
+    assert.equal((await request("/api/question-bookmarks", other)).data.bookmarks[0].explanation, null);
+    const takeSharedQuiz = () => request("/api/quiz-attempts", {
+      ...other, method: "POST", body: { quizId, answers: [0, 1, 2] }
+    });
+    const sharedAttempt = await takeSharedQuiz();
+    assert.equal(sharedAttempt.status, 201);
+    assert.equal(sharedAttempt.data.score, 3);
+    const sharedReview = `/api/quiz-attempts/${sharedAttempt.data.attemptId}`;
+    assert.equal((await request(sharedReview, owner)).status, 404);
+    assert.equal((await request("/api/question-bookmarks", other)).data.bookmarks[0].explanation, testQuiz.questions[0].explanation);
     assert.equal((await request(`/api/study-sets/${setId}/favorite`, {
       method: "PUT", cookie: second.cookie, csrfToken: second.data.csrfToken
     })).status, 200);
@@ -362,6 +397,12 @@ test("registration, quiz persistence, history, sessions, and roles", async () =>
       ...owner, method: "PATCH", body: { visibility: "private" }
     })).status, 200);
     assert.equal((await moderate(owner, "hidden")).status, 404);
+    assert.equal((await request(quizPath, other)).status, 404);
+    assert.equal((await takeSharedQuiz()).status, 404);
+    assert.equal((await request(hintPath, { ...other, method: "POST" })).status, 404);
+    assert.deepEqual((await request("/api/question-bookmarks", other)).data.bookmarks, []);
+    assert.equal((await request(sharedReview, other)).status, 200);
+    assert.equal((await request("/api/quiz-attempts", other)).data.attempts[0].canRetake, 0);
 
     const adminList = await request("/api/admin/users", { cookie: ownerCookie });
     assert.equal(adminList.status, 200);

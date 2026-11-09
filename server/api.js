@@ -9,6 +9,10 @@ import { randomUUID } from "node:crypto";
 
 const validEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const clientDist = join(dirname(fileURLToPath(import.meta.url)), "..", "client", "dist");
+const quizAccess = `(z.owner_id = ? OR EXISTS (
+  SELECT 1 FROM study_sets s
+  WHERE s.study_set_id = z.study_set_id AND s.owner_id = z.owner_id AND s.visibility = 'public'
+))`;
 
 export function createApp(database = openDatabase(), quizGenerator = generateQuizData, hintGenerator = generateQuestionHint) {
   const app = express();
@@ -256,9 +260,47 @@ export function createApp(database = openDatabase(), quizGenerator = generateQui
         ? data.flashcards.filter((card) => typeof card?.front === "string" && typeof card.back === "string").slice(0, 5)
         : [];
       return { title: data.title, summary: typeof data.summary === "string" ? data.summary : "",
-        flashcards, quizId, questions, difficulty, questionType };
+        flashcards, quizId, questions, difficulty, questionType, canEdit: true, studySetId: null };
     });
     res.status(201).json(saved);
+  });
+
+  app.get("/api/quizzes/:id", auth.requireAuth, (req, res) => {
+    const quizId = Number(req.params.id);
+    if (!Number.isSafeInteger(quizId) || quizId <= 0) return res.status(400).json({ error: "Invalid quiz." });
+    const quiz = database.prepare(`
+      SELECT z.quiz_id AS quizId, z.owner_id AS ownerId, z.study_set_id AS studySetId,
+             z.title, z.difficulty, z.question_type AS questionType
+      FROM quizzes z WHERE z.quiz_id = ? AND ${quizAccess}
+    `).get(quizId, req.user.userId);
+    if (!quiz) return res.status(404).json({ error: "Quiz not found." });
+    const options = database.prepare(`
+      SELECT option_text AS choice FROM question_options WHERE question_id = ? ORDER BY position
+    `);
+    const questions = database.prepare(`
+      SELECT question_id AS questionId, question_type AS questionType, prompt AS questionText
+      FROM questions WHERE quiz_id = ? ORDER BY position
+    `).all(quizId).map((question) => ({
+      ...question, choices: options.all(question.questionId).map(({ choice }) => choice)
+    }));
+    const { ownerId, ...practiceQuiz } = quiz;
+    res.json({ ...practiceQuiz, questions, canEdit: ownerId === req.user.userId });
+  });
+
+  app.put("/api/quizzes/:id/study-set", auth.requireCsrf, (req, res) => {
+    const quizId = Number(req.params.id);
+    const studySetId = req.body?.studySetId;
+    if (![quizId, studySetId].every((id) => Number.isSafeInteger(id) && id > 0)) {
+      return res.status(400).json({ error: "Choose a valid quiz and study set." });
+    }
+    const userId = req.user.userId;
+    const result = database.prepare(`
+      UPDATE quizzes SET study_set_id = ?
+      WHERE quiz_id = ? AND owner_id = ?
+        AND EXISTS (SELECT 1 FROM study_sets WHERE study_set_id = ? AND owner_id = ?)
+    `).run(studySetId, quizId, userId, studySetId, userId);
+    if (!result.changes) return res.status(404).json({ error: "Quiz or study set not found." });
+    res.json({ studySetId });
   });
 
   app.post("/api/questions/:id/hint", auth.requireCsrf, async (req, res) => {
@@ -266,12 +308,13 @@ export function createApp(database = openDatabase(), quizGenerator = generateQui
     if (!Number.isSafeInteger(questionId) || questionId <= 0) {
       return res.status(400).json({ error: "Invalid question." });
     }
-    const question = database.prepare(`
+    const lookup = database.prepare(`
       SELECT q.prompt, q.hint, COALESCE(q.correct_text, o.option_text) AS correctAnswer
       FROM questions q JOIN quizzes z ON z.quiz_id=q.quiz_id
       LEFT JOIN question_options o ON o.question_id=q.question_id AND o.is_correct=1
-      WHERE q.question_id=? AND z.owner_id=?
-    `).get(questionId, req.user.userId);
+      WHERE q.question_id=? AND ${quizAccess}
+    `);
+    const question = lookup.get(questionId, req.user.userId);
     if (!question) return res.status(404).json({ error: "Question not found." });
     if (question.hint) return res.json({ hint: question.hint });
     let hint;
@@ -283,6 +326,7 @@ export function createApp(database = openDatabase(), quizGenerator = generateQui
     } catch {
       return res.status(503).json({ error: "A hint is unavailable. You can still answer this question." });
     }
+    if (!lookup.get(questionId, req.user.userId)) return res.status(404).json({ error: "Question not found." });
     const saved = database.prepare(`
       UPDATE questions SET hint=COALESCE(NULLIF(hint,''),?) WHERE question_id=? RETURNING hint
     `).get(hint, questionId);
@@ -376,7 +420,12 @@ export function createApp(database = openDatabase(), quizGenerator = generateQui
       SELECT flashcard_id AS flashcardId, front_text AS front, back_text AS back
       FROM flashcards WHERE study_set_id=? ORDER BY flashcard_id
     `).all(studySetId);
-    res.json({ set, cards });
+    const quizzes = database.prepare(`
+      SELECT quiz_id AS quizId, title, difficulty, question_type AS questionType,
+             requested_count AS questionCount
+      FROM quizzes WHERE study_set_id = ? AND owner_id = ? ORDER BY quiz_id DESC
+    `).all(studySetId, set.ownerId);
+    res.json({ set, cards, quizzes });
   });
 
   app.patch("/api/study-sets/:id", auth.requireCsrf, (req, res) => {
@@ -546,7 +595,7 @@ export function createApp(database = openDatabase(), quizGenerator = generateQui
       FROM questions q
       JOIN quizzes z ON z.quiz_id = q.quiz_id
       WHERE q.question_id = ?
-        AND z.owner_id = ?
+        AND ${quizAccess}
     `).get(questionId, req.user.userId);
 
     if (!question) {
@@ -575,7 +624,10 @@ export function createApp(database = openDatabase(), quizGenerator = generateQui
         b.question_id AS questionId,
         b.created_at AS bookmarkedAt,
         q.prompt AS questionText,
-        q.explanation,
+        CASE WHEN z.owner_id = b.user_id OR EXISTS (
+          SELECT 1 FROM quiz_attempts a
+          WHERE a.quiz_id = z.quiz_id AND a.user_id = b.user_id AND a.completed_at IS NOT NULL
+        ) THEN q.explanation END AS explanation,
         z.title AS quizTitle
       FROM question_bookmarks b
       JOIN questions q
@@ -583,7 +635,7 @@ export function createApp(database = openDatabase(), quizGenerator = generateQui
       JOIN quizzes z
         ON z.quiz_id = q.quiz_id
       WHERE b.user_id = ?
-        AND z.owner_id = ?
+        AND ${quizAccess}
       ORDER BY b.created_at DESC, b.question_id DESC
     `).all(req.user.userId, req.user.userId);
 
@@ -620,7 +672,7 @@ export function createApp(database = openDatabase(), quizGenerator = generateQui
     if (!Number.isSafeInteger(quizId) || quizId <= 0 || !Array.isArray(selectedAnswers)) {
       return res.status(400).json({ error: "Invalid quiz submission." });
     }
-    const quiz = database.prepare("SELECT * FROM quizzes WHERE quiz_id=? AND owner_id=?")
+    const quiz = database.prepare(`SELECT z.quiz_id FROM quizzes z WHERE z.quiz_id=? AND ${quizAccess}`)
       .get(quizId, req.user.userId);
     if (!quiz) return res.status(404).json({ error: "Quiz not found." });
     const questions = database.prepare("SELECT * FROM questions WHERE quiz_id=? ORDER BY position")
@@ -667,13 +719,13 @@ export function createApp(database = openDatabase(), quizGenerator = generateQui
 
   app.get("/api/quiz-attempts", auth.requireAuth, (req, res) => {
     const attempts = database.prepare(`
-      SELECT a.attempt_id AS attemptId, q.title, q.difficulty, a.completed_at AS date,
-             SUM(aa.is_correct) AS score, COUNT(aa.question_id) AS total
-      FROM quiz_attempts a JOIN quizzes q ON q.quiz_id=a.quiz_id
+      SELECT a.attempt_id AS attemptId, a.quiz_id AS quizId, z.title, z.difficulty, a.completed_at AS date,
+             SUM(aa.is_correct) AS score, COUNT(aa.question_id) AS total, ${quizAccess} AS canRetake
+      FROM quiz_attempts a JOIN quizzes z ON z.quiz_id=a.quiz_id
       JOIN attempt_answers aa ON aa.attempt_id=a.attempt_id
       WHERE a.user_id=? AND a.completed_at IS NOT NULL
       GROUP BY a.attempt_id ORDER BY a.completed_at DESC, a.attempt_id DESC
-    `).all(req.user.userId);
+    `).all(req.user.userId, req.user.userId);
     res.json({ attempts });
   });
 

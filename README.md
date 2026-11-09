@@ -11,12 +11,13 @@ Open **Practice** to paste notes or import a text file, then set the question fo
 - Register, sign in, sign out, edit your display name and biography, and change your password. Server-managed sessions survive page reloads.
 - Create public or private study sets, change the visibility of your own sets, and add flashcards with front and back text. New sets default to private in the form and API.
 - View public sets and your own private sets, and add accessible sets to your favorites.
+- Save a generated quiz to a study set you own. Anyone signed in can take quizzes in a public set. Scores and submitted answers stay in each learner's own Results.
 - Search public study sets by title, topic, subject, or description. Search requires a signed-in account and a query of 1-100 characters.
 - Read and post comments on public study sets. Administrators can hide and restore those comments.
 - Upload a `.txt` file containing 20–20,000 trimmed characters. The browser limits the selected file to 60,000 bytes. The API checks the UTF-8 byte size of the received text before trimming, saves the size and completed status in `study_files`, and returns the notes to the workshop.
 - Generate multiple-choice, fill-in-the-blank, or mixed quizzes from notes or uploaded text at easy, medium, or hard difficulty. Choose 1–20 questions, with at least two for mixed quizzes. A server-side Gemini key enables generation and on-demand hints.
 - Submit an answer for every quiz question and review saved attempts, scores, submitted answers, correct answers, and explanations.
-- Bookmark questions from your own generated quizzes, view them in **Saved**, and remove bookmarks. Duplicate user/question pairs are prevented.
+- Bookmark questions from quizzes you can take, view them in **Saved**, and remove bookmarks. Duplicate user/question pairs are prevented.
 - Administrators can manage account roles and suspend accounts through the administrator view.
 
 ## Remaining work
