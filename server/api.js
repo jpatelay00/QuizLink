@@ -208,10 +208,16 @@ export function createApp(database = openDatabase(), quizGenerator = generateQui
       ({ data } = await quizGenerator(notes, difficulty, settings));
       if (!validateQuiz(data, settings)) throw new Error("Invalid quiz response");
     } catch (error) {
-      const message = error instanceof GeminiConfigurationError
-        ? "Quiz generation is unavailable. This deployment needs a Gemini API key."
-        : "Could not generate a valid quiz. Try again or adjust your notes.";
-      return res.status(503).json({ error: message });
+      if (!(error instanceof GeminiConfigurationError)) {
+        console.warn("Quiz generation failed", { questionType, questionCount, providerStatus: Number.isInteger(error?.status) ? error.status : undefined });
+      }
+      if (error instanceof GeminiConfigurationError) {
+        return res.status(503).json({ error: "Quiz generation is unavailable. This deployment needs a Gemini API key." });
+      }
+      if (error?.status === 429) {
+        return res.status(503).json({ error: "Gemini is rate limiting quiz requests. Wait and try again." });
+      }
+      return res.status(503).json({ error: "Could not generate a valid quiz. Try again or adjust your notes." });
     }
     const saved = transaction(database, () => {
       const quizId = Number(database.prepare(`
