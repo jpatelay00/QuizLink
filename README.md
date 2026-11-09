@@ -81,7 +81,7 @@ npm --prefix client run lint
 npm --prefix client run build
 ```
 
-The integration suite exercises quiz format and count validation, mixed-format scoring and history, cached hints and access checks, private defaults, and administrator comment moderation alongside the existing account and study features. It uses in-memory SQLite and fixed AI responses. Check live Gemini generation and hints separately using your configured key.
+The integration suite exercises quiz format and count validation, mixed-format scoring and history, cached hints and access checks, private defaults, and administrator comment moderation alongside the existing account and study features. It uses in-memory SQLite and fixed Gemini responses. Check live Gemini generation and hints separately using your configured key.
 
 ## Hosting
 

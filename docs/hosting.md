@@ -6,7 +6,7 @@ The root Dockerfile builds the React client and serves it with the Express API i
 
 1. Push the Sprint 4 branch to a GitHub repository you can connect to Render.
 2. Create a **Web Service** on Render. Select that branch, the **Docker** runtime, and the **Free** instance type. Keep the service root at the repository root and use its Dockerfile.
-3. Add `QUIZLINK_SECURE_COOKIES=1` and, for live AI, `GEMINI_API_KEY` as environment variables. Leave `PORT` at Render's supplied value. Set the health check path to `/api/health`.
+3. Add `QUIZLINK_SECURE_COOKIES=1` and, for live quiz generation and hints, `GEMINI_API_KEY` as environment variables. Leave `PORT` at Render's supplied value. Set the health check path to `/api/health`.
 4. Deploy and open `/api/health` on the generated HTTPS URL. Confirm it returns `{"status":"ok"}`, then create a demo account and check the full workflow.
 
 Render Free sleeps after 15 minutes without incoming traffic and clears local files when it sleeps, restarts, or redeploys. This includes SQLite accounts and attempts. Use disposable data, open the app shortly before presenting, and keep a local backup. [Render Free limitations](https://render.com/docs/free) · [Docker on Render](https://render.com/docs/docker)
