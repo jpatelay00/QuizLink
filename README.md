@@ -89,13 +89,13 @@ The integration suite uses in-memory SQLite and fixed Gemini responses. It cover
 
 At startup, the database upgrade adds upload metadata and migrates existing answers to composite foreign keys in one transaction. Existing uploads keep their extracted text and record an unknown original size as NULL. A legacy answer with inconsistent references causes the migration to roll back so the database can be inspected before retrying.
 
-On November 9, the live deployment at commit `4015c5f` passed text import, generation and grading in all three formats, saved results, a hint, and a bookmark. The database release at `8b1df52` passed upload metadata retrieval, mixed quiz generation, grading, and saved review. Comment moderation passed locally with an admin account.
+On November 9, the Render deployment at commit `4015c5f` passed text import, generation and grading in all three formats, saved results, a hint, and a bookmark. The database release at `8b1df52` passed upload metadata retrieval, mixed quiz generation, grading, and saved review. Comment moderation passed locally with an admin account.
 
 ## Hosting
 
-The Sprint 4 demo runs on [Render](https://quizlink-r3vl.onrender.com/). The release includes a startup migration for upload metadata and saved answer relationships.
+The Sprint 4 demo runs on [Railway](https://quizlink.up.railway.app/). The release includes a startup migration for upload metadata and saved answer relationships.
 
-The root Dockerfile builds the client and serves it with the Express API. The Render service deploys from `main`. Use disposable demo data because local SQLite storage on Render Free is erased on spin-down, restart, or redeploy.
+The root Dockerfile builds the client and serves it with the Express API. The Railway service deploys from `main` and stores SQLite at `/data/quizlink.db` on a persistent volume.
 
 See [Hosting QuizLink](docs/hosting.md) for setup, persistence options, and demo checks.
 
