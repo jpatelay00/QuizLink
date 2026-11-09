@@ -85,6 +85,8 @@ The integration suite exercises quiz format and count validation, mixed-format s
 
 ## Hosting
 
+The public demo runs on [Render](https://quizlink-r3vl.onrender.com/). Check the deployed commit in Render before using it to demonstrate Sprint 4.
+
 The root Dockerfile builds the client and serves it with the Express API. For a free public demo, deploy the Sprint 4 branch as a Docker Web Service on Render Free and use disposable demo data. Render Free resets local SQLite data after spin-down, restart, or redeploy. A Cloudflare Quick Tunnel can also share your local demo over HTTPS while keeping SQLite on your computer.
 
 See [Hosting QuizLink](docs/hosting.md) for setup, persistence options, and demo checks.

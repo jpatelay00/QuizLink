@@ -2,6 +2,10 @@
 
 The root Dockerfile builds the React client and serves it with the Express API in one Node.js 24 container. The server reads its port from `PORT`. Set `QUIZLINK_SECURE_COOKIES=1` for an HTTPS URL and `GEMINI_API_KEY` on the server for live quiz generation and hints.
 
+## Update the existing Render demo
+
+The existing service is [QuizLink](https://quizlink-r3vl.onrender.com/). After the Sprint 4 changes reach `main`, open the service in Render and select **Manual Deploy → Deploy latest commit**. Confirm the deploy shows the expected GitHub revision, then check [API health](https://quizlink-r3vl.onrender.com/api/health) and look for the new **Practice what you study** sign-in screen.
+
 ## Free public demo on Render
 
 1. Push the Sprint 4 branch to a GitHub repository you can connect to Render.
