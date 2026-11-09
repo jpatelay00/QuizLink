@@ -27,7 +27,7 @@ CREATE TABLE IF NOT EXISTS study_sets (
     description TEXT,
     topic TEXT,
     subject TEXT,
-    visibility TEXT NOT NULL CHECK (visibility IN ('public', 'private')),
+    visibility TEXT NOT NULL DEFAULT 'private' CHECK (visibility IN ('public', 'private')),
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );

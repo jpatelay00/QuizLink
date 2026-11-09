@@ -2,6 +2,34 @@ import { useEffect, useState } from "react";
 import { api } from "./api";
 import "./App.css";
 
+const formats = {
+  multiple_choice: "Multiple choice",
+  fill_blank: "Fill in the blank",
+  mixed: "Mixed"
+};
+
+const navigation = [
+  ["quiz", "Practice"], ["sets", "Library"], ["history", "Results"],
+  ["bookmarks", "Saved"], ["profile", "Account"], ["admin", "Admin"]
+];
+
+function AnswerReview({ question }) {
+  const written = question.questionType === "fill_blank";
+  return <article className="review-question">
+    <div className="review-heading">
+      <h3>{question.questionText}</h3>
+      <span className={question.isCorrect ? "grade grade-pass" : "grade grade-miss"}>
+        {question.isCorrect ? "Correct" : "Review"}
+      </span>
+    </div>
+    <dl className="answer-review">
+      <div><dt>Your answer</dt><dd>{written ? question.selectedText : question.choices[question.selectedAnswerIndex]}</dd></div>
+      <div><dt>Correct answer</dt><dd>{written ? question.correctText : question.choices[question.correctAnswerIndex]}</dd></div>
+    </dl>
+    {question.explanation && <p>{question.explanation}</p>}
+  </article>;
+}
+
 function App() {
   const [checkingSession, setCheckingSession] = useState(true);
   const [user, setUser] = useState(null);
@@ -15,6 +43,10 @@ function App() {
 
   const [notes, setNotes] = useState("");
   const [difficulty, setDifficulty] = useState("medium");
+  const [questionType, setQuestionType] = useState("multiple_choice");
+  const [questionCount, setQuestionCount] = useState("5");
+  const [activeQuestion, setActiveQuestion] = useState(0);
+  const [hints, setHints] = useState({});
   const [quiz, setQuiz] = useState(null);
   const [selectedAnswers, setSelectedAnswers] = useState({});
   const [result, setResult] = useState(null);
@@ -274,6 +306,16 @@ function App() {
       setUser(null);
       setCsrfToken("");
       setQuiz(null);
+      setNotes("");
+      setSelectedAnswers({});
+      setHints({});
+      setSearchTerm("");
+      setSearchResults([]);
+      setHasSearched(false);
+      setComments([]);
+      setNewComment("");
+      setSetForm({ title: "", description: "", topic: "", subject: "", visibility: "private" });
+      setCardForm({ front: "", back: "" });
       setResult(null);
       setHistory([]);
       setReview(null);
@@ -340,19 +382,21 @@ function App() {
   }
 
 
-  async function generateQuiz() {
+  async function generateQuiz(event) {
+    event.preventDefault();
     setError("");
     setMessage("");
     setBusy(true);
-    setQuiz(null);
-    setResult(null);
-    setSelectedAnswers({});
-    setFlippedCards({});
     try {
       const data = await api("/api/generate-quiz", {
-        method: "POST", body: { notes, difficulty }, csrfToken,
+        method: "POST", body: { notes, difficulty, questionType, questionCount: Number(questionCount) }, csrfToken,
       });
       setQuiz(data);
+      setResult(null);
+      setSelectedAnswers({});
+      setActiveQuestion(0);
+      setHints({});
+      setFlippedCards({});
     } catch (err) {
       setError(err.message);
     } finally {
@@ -363,7 +407,7 @@ function App() {
   async function submitQuiz() {
     if (!quiz) return;
     const answers = quiz.questions.map((_, index) => selectedAnswers[index]);
-    if (answers.some((answer) => answer === undefined)) {
+    if (answers.some((answer) => answer === undefined || (typeof answer === "string" && !answer.trim()))) {
       setError("Please answer every question before submitting.");
       return;
     }
@@ -380,6 +424,31 @@ function App() {
       setError(err.message);
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function requestHint(questionId) {
+    setHints((current) => ({ ...current, [questionId]: { pending: true } }));
+    try {
+      const { hint } = await api(`/api/questions/${questionId}/hint`, { method: "POST", csrfToken });
+      setHints((current) => ({ ...current, [questionId]: { text: hint } }));
+    } catch (err) {
+      setHints((current) => ({ ...current, [questionId]: { error: err.message } }));
+    }
+  }
+
+  async function moderateComment(comment) {
+    const studySetId = selectedSet.set.studySetId;
+    const status = comment.status === "hidden" ? "visible" : "hidden";
+    setError("");
+    try {
+      await api(`/api/study-sets/${studySetId}/comments/${comment.commentId}`, {
+        method: "PATCH", body: { status }, csrfToken
+      });
+      setComments((current) => current.map((item) =>
+        item.commentId === comment.commentId ? { ...item, status } : item));
+    } catch (err) {
+      setError(err.message);
     }
   }
 
@@ -439,24 +508,33 @@ function App() {
 
   if (checkingSession) return <main className="loading-screen"><span className="brand-mark">Q</span><p>Opening your workspace…</p></main>;
 
+  const question = quiz?.questions[activeQuestion];
+  const hint = question && hints[question.questionId];
+  const bookmarked = question && bookmarks.some((item) => item.questionId === question.questionId);
+  const isAnswered = (index) => {
+    const answer = selectedAnswers[index];
+    return typeof answer === "number" || Boolean(answer?.trim());
+  };
+  const answered = quiz ? quiz.questions.filter((_, index) => isAnswered(index)).length : 0;
+
   return (
     <div className={`app ${user ? "app-authenticated" : "app-guest"}`}>
-      {user && <aside className="sidebar">
-        <div className="brand-lockup"><span className="brand-mark">Q</span><div><strong>QuizLink</strong><small>STUDY WORKSPACE</small></div></div>
-        <p className="nav-caption">WORKSPACE</p>
-        <nav aria-label="Main navigation">
-          <button className={view === "quiz" ? "nav-active" : "nav-button"} onClick={() => showView("quiz")}><span className="nav-icon">◫</span>Practice lab</button>
-          <button className={view === "sets" ? "nav-active" : "nav-button"} onClick={() => showView("sets")}><span className="nav-icon">▦</span>Study sets</button>
-          <button className={view === "history" ? "nav-active" : "nav-button"} onClick={() => showView("history")}><span className="nav-icon">◷</span>Quiz history</button>
-          <button className={view === "bookmarks" ? "nav-active" : "nav-button"} onClick={() => showView("bookmarks")}><span className="nav-icon">☆</span>Saved Questions</button>
-          <button className={view === "profile" ? "nav-active" : "nav-button"} onClick={() => showView("profile")}><span className="nav-icon">◉</span>Profile</button>
-          {user.role === "admin" && <button className={view === "admin" ? "nav-active" : "nav-button"} onClick={() => showView("admin")}><span className="nav-icon">⚙</span>Admin</button>}
-        </nav>
-        <div className="sidebar-bottom"><div className="sidebar-user"><span className="avatar">{user.displayName.charAt(0).toUpperCase()}</span><div><strong>{user.displayName}</strong><small>{user.role}</small></div></div><button className="logout-button" onClick={logout}>Log out <span>↗</span></button></div>
-      </aside>}
+      <header className="masthead">
+        <div className="masthead-inner">
+          <div className="brand-lockup"><span className="brand-mark" aria-hidden="true">Q.</span><strong>QuizLink</strong></div>
+          {user && <>
+            <nav aria-label="Main navigation">
+              {navigation.filter(([key]) => key !== "admin" || user.role === "admin").map(([key, name]) =>
+                <button key={key} aria-current={view === key ? "page" : undefined} onClick={() => showView(key)}>{name}</button>
+              )}
+            </nav>
+            <div className="account-control"><span className="avatar" title={user.displayName} aria-hidden="true">{user.displayName.charAt(0).toUpperCase()}</span>
+              <button className="quiet" disabled={busy} onClick={logout}>Sign out</button></div>
+          </>}
+          {!user && <span className="issue-label">THE STUDY WORKSPACE</span>}
+        </div>
+      </header>
       <div className="main-column">
-        {user ? <header className="topbar"><span>YOUR LEARNING SPACE</span><span className="topbar-name">{user.displayName}</span></header>
-          : <header className="guest-topbar"><div className="brand-lockup"><span className="brand-mark">Q</span><div><strong>QuizLink</strong><small>STUDY WORKSPACE</small></div></div><span>CSC 4350 · GROUP 6</span></header>}
         <main className="content">
 
           {error && <p role="alert" className="alert error">{error}</p>}
@@ -464,25 +542,27 @@ function App() {
 
           {!user ? (
             <div className="welcome-grid">
-              <section className="welcome-panel">
-                <p className="eyebrow">YOUR MATERIAL. YOUR MOMENTUM.</p>
-                <h1>Make the most of what you study.</h1>
-                <p>Keep your notes, flashcards, and quiz results in one place. Come back tomorrow and pick up where you left off.</p>
-                <div className="welcome-feature"><span>01</span><div><strong>Collect</strong><p>Organize topics into public or private study sets.</p></div></div>
-                <div className="welcome-feature"><span>02</span><div><strong>Practice</strong><p>Make flashcards or build a quiz from your notes.</p></div></div>
-                <div className="welcome-feature"><span>03</span><div><strong>Review</strong><p>See your answers and return to past attempts.</p></div></div>
+              <section className="welcome-panel" aria-labelledby="welcome-heading">
+                <p className="eyebrow"><span className="index-square">01</span> FROM NOTES TO RECALL</p>
+                <h1 id="welcome-heading">Practice what<br />you <em>study.</em></h1>
+                <p>Turn your own notes into a quiz. Save the questions worth revisiting and see what you know next time.</p>
+                <div className="paper-demo" aria-hidden="true">
+                  <div className="demo-notes"><span>01 / CLASS NOTES</span><strong>Cell biology</strong><i /><i /><i /></div>
+                  <span className="demo-arrow">→</span>
+                  <div className="demo-question"><span>02 / PRACTICE</span><strong>Where is DNA stored?</strong><div><b>A</b> Nucleus <span>✓</span></div></div>
+                </div>
               </section>
               <section className="card auth-card">
-                <p className="eyebrow">GET STARTED</p>
+                <p className="eyebrow">YOUR ACCOUNT</p>
+                <h2>{authMode === "register" ? "Create an account" : "Sign in to QuizLink"}</h2>
                 <div className="auth-tabs">
-                  <button className={authMode === "login" ? "tab-active" : "tab"} onClick={() => { setAuthMode("login"); setError(""); }}>Log in</button>
-                  <button className={authMode === "register" ? "tab-active" : "tab"} onClick={() => { setAuthMode("register"); setError(""); }}>Sign up</button>
+                  <button aria-pressed={authMode === "login"} onClick={() => { setAuthMode("login"); setError(""); }}>Sign in</button>
+                  <button aria-pressed={authMode === "register"} onClick={() => { setAuthMode("register"); setError(""); }}>Create account</button>
                 </div>
-                <h2>{authMode === "register" ? "Create your account" : "Welcome back"}</h2>
                 <form onSubmit={handleAuth}>
                   {authMode === "register" && <label>Display name<input value={authForm.displayName} onChange={(event) => setAuthForm({ ...authForm, displayName: event.target.value })} maxLength="100" required /></label>}
-                  <label>Email<input type="email" value={authForm.email} onChange={(event) => setAuthForm({ ...authForm, email: event.target.value })} required /></label>
-                  <label>Password<input type="password" value={authForm.password} onChange={(event) => setAuthForm({ ...authForm, password: event.target.value })} minLength="8" required /></label>
+                  <label>Email<input type="email" autoComplete="username" value={authForm.email} onChange={(event) => setAuthForm({ ...authForm, email: event.target.value })} required /></label>
+                  <label>Password<input type="password" autoComplete={authMode === "register" ? "new-password" : "current-password"} value={authForm.password} onChange={(event) => setAuthForm({ ...authForm, password: event.target.value })} minLength="8" required /></label>
                   <button type="submit" className="primary" disabled={busy}>{busy ? "Please wait…" : authMode === "register" ? "Create account" : "Log in"}</button>
                 </form>
               </section>
@@ -491,70 +571,104 @@ function App() {
 
             <>
               {view === "quiz" && <>
-                <section className="page-heading"><div><p className="eyebrow">PRACTICE LAB / 01</p><h1>Practice starts with your notes.</h1><p>Build questions from material you are studying, then review every answer.</p></div><div className="heading-stat"><strong>{history.length}</strong><span>completed {history.length === 1 ? "quiz" : "quizzes"}</span></div></section>
-                <div className="work-grid"><section className="card builder-card">
-                  <div className="section-kicker"><span>01</span><span>CREATE A QUIZ</span></div>
-                  <h2>Add your study material</h2>
-                  <label htmlFor="study-file">Upload Study Material (.txt)</label>
-                  <input id="study-file" type="file" accept=".txt,text/plain" onChange={uploadStudyFile} disabled={busy}/>
-                  <p>
-                    Upload a text file to automatically fill your study notes.
-                  </p>
-                  <label htmlFor="study-notes">Study material</label>
-                  <textarea id="study-notes" value={notes} onChange={(event) => setNotes(event.target.value)} maxLength="20000" />
-                  <p>Enter at least 20 characters from the material you want to study.</p>
-                  <div className="form-row"><label htmlFor="difficulty">Difficulty</label>
-                    <select id="difficulty" value={difficulty} onChange={(event) => setDifficulty(event.target.value)}>
-                      <option value="easy">Easy</option><option value="medium">Medium</option><option value="hard">Hard</option>
-                    </select></div>
-                  <button className="primary" onClick={generateQuiz} disabled={busy}>{busy ? "Working…" : "Generate quiz"}<span aria-hidden="true">↗</span></button>
-                </section><aside className="guide-panel"><span className="guide-symbol">✳</span><h2>How it works</h2><p>Use material you are currently learning. The questions and explanations will be saved to your account after generation.</p><ol><li>Paste your notes</li><li>Choose a difficulty</li><li>Answer and review</li></ol><p className="guide-footnote">Quiz generation requires a server API key. Study sets and flashcards work without one.</p></aside></div>
+                <section className="page-heading practice-heading">
+                  <div><p className="eyebrow">01 / PRACTICE</p><h1>Quiz workshop</h1><p>Start with a page of notes. Choose how you want to be tested.</p></div>
+                  <button className="quiet history-link" onClick={() => showView("history")}>Results <span>{history.length}</span> ↗</button>
+                </section>
 
-                {quiz && <section className="card">
-                  <p className="eyebrow">Saved quiz #{quiz.quizId}</p><h2>{quiz.title}</h2><p>{quiz.summary}</p>
-                  {quiz.questions.map((question, questionIndex) => <div className="question" key={question.questionId}>
-                    <h3>{questionIndex + 1}. {question.questionText}</h3>
+                {!quiz && <form className="work-grid" onSubmit={generateQuiz}>
+                  <section className="card notes-panel">
+                    <div className="panel-bar"><span><span className="index-square">01</span> Source material</span>
+                      <label className="upload-button">Import .txt
+                        <input type="file" accept=".txt,text/plain" onChange={uploadStudyFile} disabled={busy} aria-label="Import text file" />
+                      </label>
+                    </div>
+                    <label className="sr-only" htmlFor="study-notes">Study notes</label>
+                    <textarea id="study-notes" value={notes} onChange={(event) => setNotes(event.target.value)}
+                      maxLength={20000} placeholder="Paste a lecture excerpt, vocabulary list, or your own notes…" />
+                    <div className="editor-footer"><span>20 characters minimum</span><span>{notes.length.toLocaleString()} / 20,000</span></div>
+                  </section>
+                  <section className="card setup-panel">
+                    <div className="panel-bar"><span><span className="index-square">02</span> Quiz settings</span></div>
+                    <div className="setup-body">
+                      <label htmlFor="quiz-format">Question format</label>
+                      <select id="quiz-format" value={questionType} onChange={(event) => {
+                        setQuestionType(event.target.value);
+                        if (event.target.value === "mixed" && Number(questionCount) < 2) setQuestionCount("2");
+                      }}>
+                        {Object.entries(formats).map(([value, name]) => <option key={value} value={value}>{name}</option>)}
+                      </select>
+                      <div className="field-grid setup-fields">
+                        <div><label htmlFor="difficulty">Difficulty</label>
+                          <select id="difficulty" value={difficulty} onChange={(event) => setDifficulty(event.target.value)}>
+                            <option value="easy">Easy</option><option value="medium">Medium</option><option value="hard">Hard</option>
+                          </select></div>
+                        <div><label htmlFor="question-count">Questions</label>
+                          <input id="question-count" type="number" required min={questionType === "mixed" ? 2 : 1} max={20}
+                            value={questionCount} onChange={(event) => setQuestionCount(event.target.value)} /></div>
+                      </div>
+                      {questionType === "mixed" && <p className="field-note">Mixed quizzes need at least two questions.</p>}
+                      <button className="primary build-button" type="submit" disabled={busy || notes.trim().length < 20}>
+                        {busy ? "Working…" : "Build quiz"} <span aria-hidden="true">→</span>
+                      </button>
+                    </div>
+                  </section>
+                </form>}
 
-                <button
-                  type="button"
-                  onClick={() =>
-                    bookmarks.some(
-                      (saved) => saved.questionId === question.questionId
-                    )
-                      ? removeBookmark(question.questionId)
-                      : addBookmark(question.questionId)
-                  }
-                >
-                  {bookmarks.some(
-                    (saved) => saved.questionId === question.questionId
-                  )
-                    ? "★ Bookmarked"
-                    : "☆ Bookmark"}
-                </button>
-
-
-                {question.choices.map((choice, choiceIndex) => {
-                      let className = "choice";
-                      if (selectedAnswers[questionIndex] === choiceIndex) className += " selected";
-                      if (result && choiceIndex === question.correctAnswerIndex) className += " correct";
-                      if (result && selectedAnswers[questionIndex] === choiceIndex && choiceIndex !== question.correctAnswerIndex) className += " wrong";
-                      return <button key={choiceIndex} className={className} disabled={Boolean(result)}
-                        onClick={() => setSelectedAnswers({ ...selectedAnswers, [questionIndex]: choiceIndex })}>{choice}</button>;
-                    })}
-                    {result && <div className="explanation"><strong>Correct answer:</strong> {question.choices[question.correctAnswerIndex]}<p>{question.explanation}</p></div>}
-                  </div>)}
-                  {!result ? <button className="primary" onClick={submitQuiz} disabled={busy}>Submit quiz</button>
-                    : <p className="score">Score: {result.score} / {result.total}</p>}
+                {quiz && <section className="card practice-sheet">
+                  <div className="sheet-header"><div><p className="eyebrow">{formats[quiz.questionType]} / {quiz.difficulty}</p><h2>{quiz.title}</h2></div>
+                    <button className="quiet" disabled={busy} onClick={() => { setQuiz(null); setResult(null); }}>New quiz</button></div>
+                  {result ? <>
+                    <div className="score-banner"><span>QUIZ COMPLETE</span><strong>{result.score} / {result.total}</strong><span>correct</span></div>
+                    {result.questions.map((item) => <AnswerReview key={item.questionId} question={item} />)}
+                  </> : <>
+                    <div className="progress-row"><span>{answered} of {quiz.questions.length} answered</span>
+                      <progress value={answered} max={quiz.questions.length} aria-label="Questions answered" /></div>
+                    <div className="question-index" aria-label="Jump to question">
+                      {quiz.questions.map((item, index) => <button key={item.questionId}
+                        className={isAnswered(index) ? "answered" : ""}
+                        aria-label={`Question ${index + 1}${isAnswered(index) ? ", answered" : ""}`}
+                        aria-current={index === activeQuestion ? "step" : undefined}
+                        onClick={() => setActiveQuestion(index)}>{index + 1}</button>)}
+                    </div>
+                    <article className="practice-question">
+                      <div className="question-heading"><p className="eyebrow">QUESTION {activeQuestion + 1} / {quiz.questions.length}</p>
+                        <button className="quiet" aria-pressed={bookmarked}
+                          onClick={() => bookmarked ? removeBookmark(question.questionId) : addBookmark(question.questionId)}>
+                          {bookmarked ? "★ Saved" : "☆ Save"}
+                        </button></div>
+                      <h3>{question.questionText}</h3>
+                      {question.questionType === "fill_blank" ? (
+                        <label>Your answer<input maxLength={500} value={selectedAnswers[activeQuestion] ?? ""}
+                          onChange={(event) => setSelectedAnswers({ ...selectedAnswers, [activeQuestion]: event.target.value })} /></label>
+                      ) : question.choices.map((choice, index) => (
+                        <button key={index} className="choice" aria-pressed={selectedAnswers[activeQuestion] === index}
+                          onClick={() => setSelectedAnswers({ ...selectedAnswers, [activeQuestion]: index })}>
+                          <span>{String.fromCharCode(65 + index)}</span>{choice}
+                        </button>
+                      ))}
+                      {!hint?.text && <button className="quiet hint-button" disabled={hint?.pending}
+                        onClick={() => requestHint(question.questionId)}>{hint?.pending ? "Getting hint…" : "Request a hint"}</button>}
+                      {hint?.text && <p className="hint-note" role="status"><strong>Hint</strong> {hint.text}</p>}
+                      {hint?.error && <p className="hint-note" role="alert">{hint.error}</p>}
+                    </article>
+                    <div className="practice-actions">
+                      <button className="quiet" disabled={activeQuestion === 0} onClick={() => setActiveQuestion(activeQuestion - 1)}>← Previous</button>
+                      {activeQuestion < quiz.questions.length - 1 &&
+                        <button className="quiet" onClick={() => setActiveQuestion(activeQuestion + 1)}>Next →</button>}
+                      <button className="primary" onClick={submitQuiz} disabled={busy || answered !== quiz.questions.length}>Submit quiz</button>
+                    </div>
+                  </>}
                 </section>}
 
-                {quiz?.flashcards?.length > 0 && <section className="card"><h2>Flashcards</h2><p>Click a card to flip it.</p>
+                {result && quiz?.flashcards?.length > 0 && <section className="card"><h2>Flashcards</h2><p>Select a card to flip it.</p>
                   <div className="flashcard-grid">{quiz.flashcards.map((card, index) => <button className="flashcard" key={index}
                     onClick={() => setFlippedCards({ ...flippedCards, [index]: !flippedCards[index] })}>
                     {flippedCards[index] ? card.back : card.front}</button>)}</div></section>}
               </>}
 
               {view === "sets" && <>
-                <section className="page-heading"><div><p className="eyebrow">YOUR LIBRARY / 02</p><h1>Keep ideas together.</h1><p>Create a private set or share it publicly. Add flashcards to practice key terms.</p></div><div className="heading-stat"><strong>{studySets.filter((set) => set.ownerId === user.userId).length}</strong><span>your {studySets.filter((set) => set.ownerId === user.userId).length === 1 ? "set" : "sets"}</span></div></section>
+                <section className="page-heading"><div><p className="eyebrow">YOUR LIBRARY / 02</p><h1>Study library</h1><p>Organize flashcards in your own sets or find material shared by classmates.</p></div><div className="heading-stat"><strong>{studySets.filter((set) => set.ownerId === user.userId).length}</strong><span>your {studySets.filter((set) => set.ownerId === user.userId).length === 1 ? "set" : "sets"}</span></div></section>
 
                 <section className="card">
                   <h2>Search Public Study Sets</h2>
@@ -662,9 +776,12 @@ function App() {
                         key={comment.commentId}
                       >
                         <div>
-                          <strong>{comment.authorName}</strong>
+                          <strong>{comment.authorName}{comment.status === "hidden" ? " · Hidden" : ""}</strong>
                           <p>{comment.body}</p>
                         </div>
+                        {user.role === "admin" && <div className="set-actions">
+                          <button onClick={() => moderateComment(comment)}>{comment.status === "hidden" ? "Restore" : "Hide"}</button>
+                        </div>}
                       </div>
                     ))
                   )}
@@ -725,6 +842,7 @@ function App() {
 
 
 <button
+                      className="quiet"
                       type="button"
                       onClick={() =>
                         removeBookmark(bookmark.questionId)
@@ -745,12 +863,7 @@ function App() {
                   <button onClick={() => reviewAttempt(attempt.attemptId)}>Review answers</button>
                 </div>)}
                 {review && <div className="review"><h2>{review.attempt.title} · {review.score}/{review.total}</h2>
-                  {review.questions.map((question, index) => <div className="question" key={index}>
-                    <h3>{index + 1}. {question.questionText}</h3>
-                    <p><strong>Your answer:</strong> {question.choices[question.selectedAnswerIndex]}</p>
-                    <p><strong>Correct answer:</strong> {question.choices[question.correctAnswerIndex]}</p>
-                    <p>{question.explanation}</p>
-                  </div>)}</div>}
+                  {review.questions.map((item) => <AnswerReview key={item.questionId} question={item} />)}</div>}
               </section>}
 
               {view === "profile" && <div className="profile-grid"><section className="card"><p className="eyebrow">YOUR ACCOUNT / 04</p><h1>Your profile</h1>

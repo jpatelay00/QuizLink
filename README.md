@@ -5,19 +5,19 @@ QuizLink is a study workspace for organizing material, creating flashcards, gene
 ## Current features
 
 - Register, sign in, sign out, edit your display name and biography, and change your password. Server-managed sessions survive page reloads.
-- Create public or private study sets, change the visibility of your own sets, and add flashcards with front and back text. The creation form defaults to private.
+- Create public or private study sets, change the visibility of your own sets, and add flashcards with front and back text. New sets default to private in the form and API.
 - View public sets and your own private sets, and add accessible sets to your favorites.
 - Search public study sets by title, topic, subject, or description. Search requires a signed-in account and a query of 1-100 characters.
-- Read and post comments on public study sets. Comments must contain 1-2000 characters after trimming.
+- Read and post comments on public study sets. Administrators can hide and restore those comments.
 - Upload a `.txt` file containing 20-20,000 characters. The browser also limits the selected file to 60,000 bytes. The server stores its text and metadata in `study_files`, then returns the text to fill the quiz notes field.
-- Generate a multiple-choice quiz from notes or uploaded text at easy, medium, or hard difficulty when a server-side Gemini API key is configured. The generation request asks for five questions with four choices each, explanations, and flashcards.
+- Generate multiple-choice, fill-in-the-blank, or mixed quizzes from notes or uploaded text at easy, medium, or hard difficulty. Choose 1–20 questions, with at least two for mixed quizzes. A server-side Gemini key enables generation and on-demand hints.
 - Submit an answer for every quiz question and review saved attempts, scores, submitted answers, correct answers, and explanations.
 - Bookmark questions from your own generated quizzes, view them in **Saved Questions**, and remove bookmarks. Duplicate user/question pairs are prevented.
 - Administrators can manage account roles and suspend accounts through the administrator view.
 
 ## Design targets not yet implemented
 
-The current interface does not provide PDF extraction, a hint-request flow, comment moderation, question-type selection, or a question-count control. The project design includes multiple-choice, fill-in-the-blank, and mixed quizzes with a selectable count of 1-20; the current generator requests five multiple-choice questions.
+Uploads support plain text. PDF extraction is still a design target.
 
 The proposed upload fields `file_size` and `processing_status`, and the proposed composite option/question foreign key, are not in the current SQL schema. Running the application creates the current tables; it does not apply these proposed schema changes. AI-generated flashcards are displayed with a generated quiz and are not automatically inserted into a study set's saved flashcards.
 
@@ -25,7 +25,7 @@ The proposed upload fields `file_size` and `processing_status`, and the proposed
 
 - Node.js 24 or newer
 - npm
-- A Gemini API key for live quiz generation; other account and study features work without one
+- A Gemini API key for live quiz generation and hints; other account and study features work without one
 
 ## Start the application
 

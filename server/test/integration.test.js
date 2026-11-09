@@ -15,9 +15,20 @@ const testQuiz = {
 
 test("registration, quiz persistence, history, sessions, and roles", async () => {
   const database = openDatabase(":memory:");
-  const app = createApp(database, async () => ({ data: testQuiz }));
+  let hintCalls = 0;
+  const app = createApp(database, async (_notes, _difficulty, settings) => ({
+    data: settings.questionType === "mixed" ? {
+      ...testQuiz, questions: [testQuiz.questions[0], {
+        questionType: "fill_blank", questionText: "DNA means ___.", explanation: "DNA is the genetic material.",
+        correctText: "Deoxyribonucleic acid"
+      }]
+    } : testQuiz
+  }), async () => {
+    hintCalls++;
+    return "Think about where the genetic material is kept.";
+  });
   const server = app.listen(0, "127.0.0.1");
-  await once(server, "listening");
+  if (!server.listening) await once(server, "listening");
   const base = `http://127.0.0.1:${server.address().port}`;
 
   async function request(path, { method = "GET", body, cookie, csrfToken } = {}) {
@@ -61,7 +72,7 @@ test("registration, quiz persistence, history, sessions, and roles", async () =>
     })).status, 403);
     const generated = await request("/api/generate-quiz", {
       method: "POST", cookie: ownerCookie, csrfToken: ownerCsrf,
-      body: { notes, difficulty: "medium" }
+      body: { notes, difficulty: "medium", questionCount: 3 }
     });
     assert.equal(generated.status, 201);
     assert.equal(generated.data.questions.length, 3);
@@ -192,9 +203,44 @@ test("registration, quiz persistence, history, sessions, and roles", async () =>
     assert.equal((await request(`/api/quiz-attempts/${submitted.data.attemptId}`, { cookie: second.cookie })).status, 404);
     assert.equal((await request("/api/admin/users", { cookie: ownerCookie })).status, 403);
 
+    const owner = { cookie: ownerCookie, csrfToken: ownerCsrf };
+    const other = { cookie: second.cookie, csrfToken: second.data.csrfToken };
+    const hintPath = `/api/questions/${questionId}/hint`;
+    assert.equal((await request(hintPath, { ...other, method: "POST" })).status, 404);
+    for (let call = 0; call < 2; call++) {
+      const hint = await request(hintPath, { ...owner, method: "POST" });
+      assert.equal(hint.status, 200);
+      assert.match(hint.data.hint, /genetic material/);
+    }
+    assert.equal(hintCalls, 1);
+
+    const generate = (options) => request("/api/generate-quiz", {
+      ...owner, method: "POST", body: { notes, difficulty: "medium", ...options }
+    });
+    assert.equal((await generate({ questionCount: 21 })).status, 400);
+    assert.equal((await generate({ questionType: "mixed", questionCount: 1 })).status, 400);
+    assert.equal((await generate({ questionCount: 2 })).status, 503);
+    assert.equal(database.prepare("SELECT count(*) AS count FROM quizzes").get().count, 1);
+    const mixed = await generate({ questionType: "mixed", questionCount: 2 });
+    assert.equal(mixed.status, 201);
+    assert.equal(mixed.data.questions[1].questionType, "fill_blank");
+    assert.equal(mixed.data.questions[1].correctText, undefined);
+    assert.equal(mixed.data.questions[0].correctAnswerIndex, undefined);
+    const submit = (answers) => request("/api/quiz-attempts", {
+      ...owner, method: "POST", body: { quizId: mixed.data.quizId, answers }
+    });
+    assert.equal((await submit([0, "   "])).status, 400);
+    const mixedResult = await submit([0, " DEOXYRIBONUCLEIC   ACID "]);
+    assert.equal(mixedResult.status, 201);
+    assert.equal(mixedResult.data.score, 2);
+    assert.equal(mixedResult.data.questions[1].correctText, "Deoxyribonucleic acid");
+    const mixedReview = await request(`/api/quiz-attempts/${mixedResult.data.attemptId}`, owner);
+    assert.equal(mixedReview.data.score, 2);
+    assert.equal(mixedReview.data.questions[1].selectedText, "DEOXYRIBONUCLEIC   ACID");
+
     const privateSet = await request("/api/study-sets", {
       method: "POST", cookie: ownerCookie, csrfToken: ownerCsrf,
-      body: { title: "Cell structures", description: "Biology review", topic: "Cells", subject: "Biology", visibility: "private" }
+      body: { title: "Cell structures", description: "Biology review", topic: "Cells", subject: "Biology" }
     });
     assert.equal(privateSet.status, 201);
     const setId = privateSet.data.studySetId;
@@ -224,6 +270,27 @@ test("registration, quiz persistence, history, sessions, and roles", async () =>
     })).status, 200);
 
     database.prepare("UPDATE users SET role='admin' WHERE email=?").run("alex@example.test");
+    const commentsPath = `/api/study-sets/${setId}/comments`;
+    const comment = await request(commentsPath, {
+      ...other, method: "POST", body: { body: "Helpful review notes." }
+    });
+    assert.equal(comment.status, 201);
+    const commentPath = `${commentsPath}/${comment.data.commentId}`;
+    const moderate = (session, status) => request(commentPath, {
+      ...session, method: "PATCH", body: { status }
+    });
+    assert.equal((await moderate(other, "hidden")).status, 403);
+    assert.equal((await moderate({ cookie: ownerCookie }, "hidden")).status, 403);
+    assert.equal((await moderate(owner, "hidden")).status, 200);
+    assert.equal((await request(commentsPath, other)).data.comments.length, 0);
+    assert.equal((await request(commentsPath, owner)).data.comments[0].status, "hidden");
+    assert.equal((await moderate(owner, "visible")).status, 200);
+    assert.equal((await request(commentsPath, other)).data.comments.length, 1);
+    assert.equal((await request(`/api/study-sets/${setId}`, {
+      ...owner, method: "PATCH", body: { visibility: "private" }
+    })).status, 200);
+    assert.equal((await moderate(owner, "hidden")).status, 404);
+
     const adminList = await request("/api/admin/users", { cookie: ownerCookie });
     assert.equal(adminList.status, 200);
     const sam = adminList.data.users.find((user) => user.email === "sam@example.test");

@@ -4,13 +4,13 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { openDatabase, transaction, utcTimestamp } from "./db.js";
 import { createAuth, hashPassword, verifyPassword } from "./auth.js";
-import { generateQuizData } from "./quiz.js";
+import { generateQuestionHint, generateQuizData, normalizeAnswer, questionTypes, validateQuiz } from "./quiz.js";
 import { randomUUID } from "node:crypto";
 
 const validEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const clientDist = join(dirname(fileURLToPath(import.meta.url)), "..", "client", "dist");
 
-export function createApp(database = openDatabase(), quizGenerator = generateQuizData) {
+export function createApp(database = openDatabase(), quizGenerator = generateQuizData, hintGenerator = generateQuestionHint) {
   const app = express();
   const auth = createAuth(database);
   app.disable("x-powered-by");
@@ -194,33 +194,78 @@ export function createApp(database = openDatabase(), quizGenerator = generateQui
     if (!["easy", "medium", "hard"].includes(difficulty)) {
       return res.status(400).json({ error: "Choose easy, medium, or hard difficulty." });
     }
+    const { questionType = "multiple_choice", questionCount = 5 } = req.body;
+    if (!questionTypes.includes(questionType)) {
+      return res.status(400).json({ error: "Choose a supported question format." });
+    }
+    const minimum = questionType === "mixed" ? 2 : 1;
+    if (!Number.isInteger(questionCount) || questionCount < minimum || questionCount > 20) {
+      return res.status(400).json({ error: `Choose a whole number between ${minimum} and 20.` });
+    }
+    const settings = { questionType, questionCount };
     let data;
     try {
-      ({ data } = await quizGenerator(notes, difficulty));
-    } catch (error) {
-      return res.status(503).json({ error: error.message });
+      ({ data } = await quizGenerator(notes, difficulty, settings));
+      if (!validateQuiz(data, settings)) throw new Error("Invalid quiz response");
+    } catch {
+      return res.status(503).json({ error: "Could not generate a valid quiz. Check Gemini configuration or try again." });
     }
     const saved = transaction(database, () => {
       const quizId = Number(database.prepare(`
         INSERT INTO quizzes(owner_id,title,source_text,difficulty,question_type,requested_count)
         VALUES (?,?,?,?,?,?)
-      `).run(req.user.userId, data.title, notes, difficulty, "multiple_choice", data.questions.length).lastInsertRowid);
+      `).run(req.user.userId, data.title, notes, difficulty, questionType, questionCount).lastInsertRowid);
       const questions = data.questions.map((question, index) => {
+        const type = question.questionType ?? "multiple_choice";
+        const correctText = type === "fill_blank" ? question.correctText.trim() : null;
         const questionId = Number(database.prepare(`
-          INSERT INTO questions(quiz_id,position,question_type,prompt,explanation)
-          VALUES (?,?,?,?,?)
-        `).run(quizId, index + 1, "multiple_choice", question.questionText, question.explanation).lastInsertRowid);
-        question.choices.forEach((choice, optionIndex) => {
+          INSERT INTO questions(quiz_id,position,question_type,prompt,correct_text,explanation)
+          VALUES (?,?,?,?,?,?)
+        `).run(quizId, index + 1, type, question.questionText, correctText, question.explanation).lastInsertRowid);
+        const choices = type === "multiple_choice" ? question.choices : [];
+        choices.forEach((choice, optionIndex) => {
           database.prepare(`
             INSERT INTO question_options(question_id,position,option_text,is_correct)
             VALUES (?,?,?,?)
           `).run(questionId, optionIndex + 1, choice, optionIndex === question.correctAnswerIndex ? 1 : 0);
         });
-        return { ...question, questionId };
+        return { questionId, questionType: type, questionText: question.questionText, choices };
       });
-      return { ...data, quizId, questions, difficulty };
+      const flashcards = Array.isArray(data.flashcards)
+        ? data.flashcards.filter((card) => typeof card?.front === "string" && typeof card.back === "string").slice(0, 5)
+        : [];
+      return { title: data.title, summary: typeof data.summary === "string" ? data.summary : "",
+        flashcards, quizId, questions, difficulty, questionType };
     });
     res.status(201).json(saved);
+  });
+
+  app.post("/api/questions/:id/hint", auth.requireCsrf, async (req, res) => {
+    const questionId = Number(req.params.id);
+    if (!Number.isSafeInteger(questionId) || questionId <= 0) {
+      return res.status(400).json({ error: "Invalid question." });
+    }
+    const question = database.prepare(`
+      SELECT q.prompt, q.hint, COALESCE(q.correct_text, o.option_text) AS correctAnswer
+      FROM questions q JOIN quizzes z ON z.quiz_id=q.quiz_id
+      LEFT JOIN question_options o ON o.question_id=q.question_id AND o.is_correct=1
+      WHERE q.question_id=? AND z.owner_id=?
+    `).get(questionId, req.user.userId);
+    if (!question) return res.status(404).json({ error: "Question not found." });
+    if (question.hint) return res.json({ hint: question.hint });
+    let hint;
+    try {
+      hint = (await hintGenerator(question))?.trim();
+      if (!hint || hint.length > 400 || normalizeAnswer(hint) === normalizeAnswer(question.correctAnswer ?? "")) {
+        throw new Error("Invalid hint response");
+      }
+    } catch {
+      return res.status(503).json({ error: "A hint is unavailable. You can still answer this question." });
+    }
+    const saved = database.prepare(`
+      UPDATE questions SET hint=COALESCE(NULLIF(hint,''),?) WHERE question_id=? RETURNING hint
+    `).get(hint, questionId);
+    res.json(saved);
   });
 
   app.get("/api/study-sets", auth.requireAuth, (req, res) => {
@@ -242,7 +287,7 @@ export function createApp(database = openDatabase(), quizGenerator = generateQui
     const description = typeof req.body?.description === "string" ? req.body.description.trim() : "";
     const topic = typeof req.body?.topic === "string" ? req.body.topic.trim() : "";
     const subject = typeof req.body?.subject === "string" ? req.body.subject.trim() : "";
-    const visibility = req.body?.visibility;
+    const { visibility = "private" } = req.body ?? {};
     if (!title || title.length > 150 || description.length > 1000 || topic.length > 100 ||
         subject.length > 100 || !["public", "private"].includes(visibility)) {
       return res.status(400).json({ error: "Enter a title and choose public or private visibility." });
@@ -352,14 +397,15 @@ export function createApp(database = openDatabase(), quizGenerator = generateQui
       SELECT
         c.comment_id AS commentId,
         c.body,
+        c.status,
         c.created_at AS createdAt,
         u.display_name AS authorName
       FROM study_set_comments c
       JOIN users u ON u.user_id = c.author_id
       WHERE c.study_set_id = ?
-        AND c.status = 'visible'
+        AND (c.status = 'visible' OR ? = 'admin')
       ORDER BY c.created_at ASC, c.comment_id ASC
-    `).all(studySetId);
+    `).all(studySetId, req.user.role);
 
     res.json({ comments });
   });
@@ -410,6 +456,23 @@ export function createApp(database = openDatabase(), quizGenerator = generateQui
     });
   });
 
+
+  app.patch("/api/study-sets/:id/comments/:commentId", auth.requireAdmin, auth.requireCsrf, (req, res) => {
+    const studySetId = Number(req.params.id);
+    const commentId = Number(req.params.commentId);
+    const status = req.body?.status;
+    if (![studySetId, commentId].every((id) => Number.isSafeInteger(id) && id > 0) ||
+        !["visible", "hidden"].includes(status)) {
+      return res.status(400).json({ error: "Invalid comment or visibility." });
+    }
+    const result = database.prepare(`
+      UPDATE study_set_comments SET status=?
+      WHERE comment_id=? AND study_set_id=?
+        AND EXISTS (SELECT 1 FROM study_sets WHERE study_set_id=? AND visibility='public')
+    `).run(status, commentId, studySetId, studySetId);
+    if (!result.changes) return res.status(404).json({ error: "Public comment not found." });
+    res.json({ status });
+  });
 
   app.post("/api/study-sets/:id/flashcards", auth.requireCsrf, (req, res) => {
     const studySetId = Number(req.params.id);
@@ -546,14 +609,23 @@ export function createApp(database = openDatabase(), quizGenerator = generateQui
     }
     const answers = [];
     for (let index = 0; index < questions.length; index++) {
-      const options = database.prepare("SELECT * FROM question_options WHERE question_id=? ORDER BY position")
-        .all(questions[index].question_id);
-      const selectedIndex = selectedAnswers[index];
-      if (!Number.isInteger(selectedIndex) || selectedIndex < 0 || selectedIndex >= options.length) {
-        return res.status(400).json({ error: "Choose one valid answer for each question." });
+      const question = questions[index];
+      const selection = selectedAnswers[index];
+      if (question.question_type === "fill_blank") {
+        if (typeof selection !== "string" || selection.length > 500 || !normalizeAnswer(selection)) {
+          return res.status(400).json({ error: "Enter a short answer for every fill-in-the-blank question." });
+        }
+        answers.push({ questionId: question.question_id, optionId: null, answerText: selection.trim(),
+          correct: Number(normalizeAnswer(selection) === normalizeAnswer(question.correct_text ?? "")) });
+        continue;
       }
-      answers.push({ questionId: questions[index].question_id,
-        optionId: options[selectedIndex].option_id, correct: options[selectedIndex].is_correct });
+      const options = database.prepare("SELECT * FROM question_options WHERE question_id=? ORDER BY position")
+        .all(question.question_id);
+      if (!Number.isInteger(selection) || selection < 0 || selection >= options.length) {
+        return res.status(400).json({ error: "Choose one valid answer for each multiple-choice question." });
+      }
+      answers.push({ questionId: question.question_id, optionId: options[selection].option_id,
+        answerText: null, correct: options[selection].is_correct });
     }
     const score = answers.reduce((sum, answer) => sum + answer.correct, 0);
     const attemptId = transaction(database, () => {
@@ -563,13 +635,13 @@ export function createApp(database = openDatabase(), quizGenerator = generateQui
       const newId = Number(result.lastInsertRowid);
       for (const answer of answers) {
         database.prepare(`
-          INSERT INTO attempt_answers(attempt_id,question_id,selected_option_id,is_correct)
-          VALUES (?,?,?,?)
-        `).run(newId, answer.questionId, answer.optionId, answer.correct);
+          INSERT INTO attempt_answers(attempt_id,question_id,selected_option_id,answer_text,is_correct)
+          VALUES (?,?,?,?,?)
+        `).run(newId, answer.questionId, answer.optionId, answer.answerText, answer.correct);
       }
       return newId;
     });
-    res.status(201).json({ attemptId, score, total: answers.length });
+    res.status(201).json({ attemptId, score, total: answers.length, questions: reviewQuestions(database, attemptId) });
   });
 
   app.get("/api/quiz-attempts", auth.requireAuth, (req, res) => {
@@ -595,24 +667,9 @@ export function createApp(database = openDatabase(), quizGenerator = generateQui
       WHERE a.attempt_id=? AND a.user_id=? AND a.completed_at IS NOT NULL
     `).get(attemptId, req.user.userId);
     if (!attempt) return res.status(404).json({ error: "Attempt not found." });
-    const rows = database.prepare(`
-      SELECT q.question_id, q.prompt, q.explanation, q.position, aa.selected_option_id
-      FROM attempt_answers aa JOIN questions q ON q.question_id=aa.question_id
-      WHERE aa.attempt_id=? ORDER BY q.position
-    `).all(attemptId);
-    const questions = rows.map((row) => {
-      const options = database.prepare("SELECT option_id,option_text,is_correct FROM question_options WHERE question_id=? ORDER BY position")
-        .all(row.question_id);
-      return {
-        questionText: row.prompt, explanation: row.explanation,
-        choices: options.map((option) => option.option_text),
-        correctAnswerIndex: options.findIndex((option) => option.is_correct === 1),
-        selectedAnswerIndex: options.findIndex((option) => option.option_id === row.selected_option_id)
-      };
-    });
-    res.json({ attempt, questions, score: questions.reduce((sum, question) =>
-      sum + (question.correctAnswerIndex === question.selectedAnswerIndex ? 1 : 0), 0),
-    total: questions.length });
+    const questions = reviewQuestions(database, attemptId);
+    res.json({ attempt, questions, score: questions.reduce((sum, question) => sum + Number(question.isCorrect), 0),
+      total: questions.length });
   });
 
   app.get("/api/admin/users", auth.requireAdmin, (_req, res) => {
@@ -654,4 +711,31 @@ export function createApp(database = openDatabase(), quizGenerator = generateQui
     res.status(500).json({ error: "Server error. Please try again." });
   });
   return app;
+}
+
+
+function reviewQuestions(database, attemptId) {
+  const rows = database.prepare(`
+    SELECT q.question_id, q.prompt, q.explanation, q.question_type, q.correct_text,
+           aa.selected_option_id, aa.answer_text, aa.is_correct
+    FROM attempt_answers aa JOIN questions q ON q.question_id=aa.question_id
+    WHERE aa.attempt_id=? ORDER BY q.position
+  `).all(attemptId);
+  return rows.map((row) => {
+    const options = database.prepare(`
+      SELECT option_id,option_text,is_correct FROM question_options WHERE question_id=? ORDER BY position
+    `).all(row.question_id);
+    return {
+      questionId: row.question_id,
+      questionType: row.question_type,
+      questionText: row.prompt,
+      explanation: row.explanation,
+      correctText: row.correct_text,
+      selectedText: row.answer_text,
+      isCorrect: Boolean(row.is_correct),
+      choices: options.map((option) => option.option_text),
+      correctAnswerIndex: options.findIndex((option) => option.is_correct === 1),
+      selectedAnswerIndex: options.findIndex((option) => option.option_id === row.selected_option_id)
+    };
+  });
 }
