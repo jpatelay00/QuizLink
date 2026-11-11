@@ -582,6 +582,11 @@ export function createApp(database = openDatabase(), quizGenerator = generateQui
       cards = await flashcardGenerator(notes, count);
       if (!validateFlashcards(cards, count)) throw new Error("Invalid flashcards");
     } catch (error) {
+      console.warn("Flashcard generation failed", {
+        providerStatus: Number.isInteger(error?.status) ? error.status : undefined,
+        errorType: error?.name,
+        returnedCount: Array.isArray(cards) ? cards.length : null
+      });
       const message = error instanceof GeminiConfigurationError
         ? "Flashcard generation is unavailable. This deployment needs a Gemini API key."
         : error?.status === 429 ? "Gemini is rate limiting requests. Wait and try again."
