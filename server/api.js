@@ -239,6 +239,9 @@ export function createApp(database = openDatabase(), quizGenerator = generateQui
       if (error?.status === 429) {
         return res.status(503).json({ error: "Gemini is rate limiting quiz requests. Wait and try again." });
       }
+      if (error?.status === 503) {
+        return res.status(503).json({ error: "Gemini is temporarily unavailable. Please try again shortly." });
+      }
       return res.status(503).json({ error: "Could not generate a valid quiz. Try again or adjust your notes." });
     }
     const saved = transaction(database, () => {
@@ -590,6 +593,7 @@ export function createApp(database = openDatabase(), quizGenerator = generateQui
       const message = error instanceof GeminiConfigurationError
         ? "Flashcard generation is unavailable. This deployment needs a Gemini API key."
         : error?.status === 429 ? "Gemini is rate limiting requests. Wait and try again."
+          : error?.status === 503 ? "Gemini is temporarily unavailable. Please try again shortly."
           : "Could not generate valid flashcards. Try again or adjust your notes.";
       return res.status(503).json({ error: message });
     }
