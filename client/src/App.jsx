@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api } from "./api";
 import "./App.css";
 
@@ -29,7 +29,13 @@ function NavIcon({ name }) {
   </svg>;
 }
 
-function AnswerReview({ question }) {
+function SaveQuestionButton({ questionId, bookmarks, pending, onToggle }) {
+  const saved = bookmarks.some((bookmark) => bookmark.questionId === questionId);
+  return <button type="button" className="quiet" aria-pressed={saved} disabled={pending}
+    onClick={() => onToggle(questionId, saved)}>{saved ? "Unsave question" : "Save question"}</button>;
+}
+
+function AnswerReview({ question, children }) {
   const written = question.questionType === "fill_blank";
   return <article className="review-question">
     <div className="review-heading">
@@ -43,6 +49,7 @@ function AnswerReview({ question }) {
       <div><dt>Correct answer</dt><dd>{written ? question.correctText : question.choices[question.correctAnswerIndex]}</dd></div>
     </dl>
     {question.explanation && <p>{question.explanation}</p>}
+    {children}
   </article>;
 }
 
@@ -70,6 +77,7 @@ function App() {
   const [flippedCards, setFlippedCards] = useState({});
   const [history, setHistory] = useState([]);
   const [bookmarks, setBookmarks] = useState([]);
+  const [bookmarkPending, setBookmarkPending] = useState(false);
   const [review, setReview] = useState(null);
   const [profileForm, setProfileForm] = useState({ displayName: "", bio: "" });
   const [passwordForm, setPasswordForm] = useState({ currentPassword: "", newPassword: "" });
@@ -86,6 +94,17 @@ function App() {
   const [setForm, setSetForm] = useState({ title: "", description: "", topic: "", subject: "", visibility: "private" });
   const [cardForm, setCardForm] = useState({ front: "", back: "" });
   const [flippedSetCards, setFlippedSetCards] = useState({});
+  const [generationNotes, setGenerationNotes] = useState("");
+  const [generateType, setGenerateType] = useState("flashcards");
+  const [generationCount, setGenerationCount] = useState("5");
+  const [generationDifficulty, setGenerationDifficulty] = useState("medium");
+  const [generationFormat, setGenerationFormat] = useState("multiple_choice");
+  const setDetailRef = useRef(null);
+  const selectedSetId = selectedSet?.set.studySetId;
+
+  useEffect(() => {
+    if (selectedSetId) setDetailRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, [selectedSetId]);
 
   useEffect(() => {
     api("/api/auth/me")
@@ -150,6 +169,16 @@ function App() {
       setMessage("Question bookmarked successfully.");
     } catch (err) {
       setError(err.message);
+    }
+  }
+
+  async function toggleQuestionBookmark(questionId, saved) {
+    setBookmarkPending(true);
+    try {
+      if (saved) await removeBookmark(questionId);
+      else await addBookmark(questionId);
+    } finally {
+      setBookmarkPending(false);
     }
   }
 
@@ -222,6 +251,7 @@ function App() {
         setComments(result.comments);
       }
     } catch (err) {
+      setSelectedSet(null);
       setError(err.message);
     }
   }
@@ -291,6 +321,37 @@ function App() {
     } catch (err) { setError(err.message); }
   }
 
+  async function generateSetContent(event) {
+    event.preventDefault();
+    setError("");
+    setMessage("");
+    setBusy(true);
+    const studySetId = selectedSet.set.studySetId;
+    try {
+      if (generateType === "flashcards") {
+        const { count } = await api(`/api/study-sets/${studySetId}/generate-flashcards`, {
+          method: "POST", body: { notes: generationNotes, count: Number(generationCount) }, csrfToken
+        });
+        await openSet(studySetId);
+        setMessage(`${count} flashcards generated and saved to this study set.`);
+      } else {
+        const data = await api("/api/generate-quiz", {
+          method: "POST", body: {
+            notes: generationNotes, questionCount: Number(generationCount), difficulty: generationDifficulty,
+            questionType: generationFormat, studySetId
+          }, csrfToken
+        });
+        startQuiz(data);
+        setMessage("Quiz generated and saved to the study set.");
+      }
+      await refreshSets();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function toggleFavorite(set) {
     setError("");
     try {
@@ -326,6 +387,7 @@ function App() {
       setCsrfToken("");
       setQuiz(null);
       setNotes("");
+      setGenerationNotes("");
       setSelectedAnswers({});
       setHints({});
       setSearchTerm("");
@@ -349,7 +411,7 @@ function App() {
   }
 
 
-  async function uploadStudyFile(event) {
+  async function uploadStudyFile(event, onImport = setNotes) {
     const file = event.target.files?.[0];
 
     if (!file) return;
@@ -390,7 +452,7 @@ function App() {
         csrfToken
       });
 
-      setNotes(data.content);
+      onImport(data.content);
       setMessage(`Uploaded ${data.filename} successfully.`);
     } catch (err) {
       setError(err.message);
@@ -412,12 +474,15 @@ function App() {
     setView("quiz");
   }
 
-  async function openQuiz(quizId) {
+  async function openQuiz(quizId, questionId) {
     setError("");
     setMessage("");
     setBusy(true);
     try {
-      startQuiz(await api(`/api/quizzes/${quizId}`));
+      const data = await api(`/api/quizzes/${quizId}`);
+      startQuiz(data);
+      const index = data.questions.findIndex((item) => item.questionId === questionId);
+      if (index >= 0) setActiveQuestion(index);
     } catch (err) {
       setError(err.message);
     } finally {
@@ -567,7 +632,6 @@ function App() {
   const question = quiz?.questions[activeQuestion];
   const ownedSets = studySets.filter((set) => set.ownerId === user?.userId);
   const hint = question && hints[question.questionId];
-  const bookmarked = question && bookmarks.some((item) => item.questionId === question.questionId);
   const isAnswered = (index) => {
     const answer = selectedAnswers[index];
     return typeof answer === "number" || Boolean(answer?.trim());
@@ -706,7 +770,9 @@ function App() {
                   ) : <p>Create a study set in Library, then return here to save this quiz.</p>)}
                   {result ? <>
                     <div className="score-banner"><span>QUIZ COMPLETE</span><strong>{result.score} / {result.total}</strong><span>correct</span></div>
-                    {result.questions.map((item) => <AnswerReview key={item.questionId} question={item} />)}
+                    {result.questions.map((item) => <AnswerReview key={item.questionId} question={item}>
+                      <SaveQuestionButton questionId={item.questionId} bookmarks={bookmarks} pending={bookmarkPending} onToggle={toggleQuestionBookmark} />
+                    </AnswerReview>)}
                   </> : <>
                     <div className="progress-row"><span>{answered} of {quiz.questions.length} answered</span>
                       <progress value={answered} max={quiz.questions.length} aria-label="Questions answered" /></div>
@@ -719,10 +785,7 @@ function App() {
                     </div>
                     <article className="practice-question">
                       <div className="question-heading"><p className="eyebrow">QUESTION {activeQuestion + 1} / {quiz.questions.length}</p>
-                        <button className="quiet" aria-pressed={bookmarked}
-                          onClick={() => bookmarked ? removeBookmark(question.questionId) : addBookmark(question.questionId)}>
-                          {bookmarked ? "★ Saved" : "☆ Save"}
-                        </button></div>
+                        <SaveQuestionButton questionId={question.questionId} bookmarks={bookmarks} pending={bookmarkPending} onToggle={toggleQuestionBookmark} /></div>
                       <h3>{question.questionText}</h3>
                       {question.questionType === "fill_blank" ? (
                         <label>Your answer<input maxLength={500} value={selectedAnswers[activeQuestion] ?? ""}
@@ -832,15 +895,47 @@ function App() {
                 <section className="card"><h2>Available study sets</h2>
                   {studySets.length === 0 ? <p>No study sets yet. Create the first one above.</p> : studySets.map((set) =>
                     <div className="set-row" key={set.studySetId}>
-                      <div><strong>{set.title}</strong><p>{set.visibility} · {set.ownerName} · {set.cardCount} flashcards</p>{set.description && <p>{set.description}</p>}</div>
-                      <div className="set-actions"><button onClick={() => openSet(set.studySetId)}>Open</button>
+                      <div><button className="set-title" onClick={() => openSet(set.studySetId)}>{set.title}</button><p>{set.visibility} · {set.ownerName} · {set.cardCount} flashcards · {set.quizCount} quizzes</p>{set.description && <p>{set.description}</p>}</div>
+                      <div className="set-actions"><button disabled={busy} onClick={() => openSet(set.studySetId)}>Open</button>
                         <button onClick={() => toggleFavorite(set)}>{set.isFavorite ? "Unfavorite" : "Favorite"}</button></div>
                     </div>)}
                 </section>
-                {selectedSet && <section className="card"><h2>{selectedSet.set.title}</h2>
+                {selectedSet && <section className="card set-detail" ref={setDetailRef}><h2>{selectedSet.set.title}</h2>
                   <p>{selectedSet.set.visibility} · {selectedSet.set.ownerName}</p>
+                  <p>{selectedSet.set.visibility === "public"
+                    ? "Signed-in learners can take these quizzes, practice flashcards, and comment. Each learner's results stay private."
+                    : "Only you can open this study set. Make it public to share its quizzes and flashcards."}</p>
                   {selectedSet.set.ownerId === user.userId && <div className="form-row"><label htmlFor="set-visibility">Visibility</label>
                     <select id="set-visibility" value={selectedSet.set.visibility} onChange={(event) => changeVisibility(event.target.value)}><option value="private">Private</option><option value="public">Public</option></select></div>}
+                  {selectedSet.set.ownerId === user.userId && <form className="set-generator" onSubmit={generateSetContent}>
+                    <h3>Generate from your notes</h3>
+                    <label>Study notes<textarea value={generationNotes} onChange={(event) => setGenerationNotes(event.target.value)}
+                      minLength={20} maxLength={20000} required disabled={busy} /></label>
+                    <label className="upload-button">Import .txt
+                      <input type="file" accept=".txt,text/plain" aria-label="Import study set notes" disabled={busy}
+                        onChange={(event) => uploadStudyFile(event, setGenerationNotes)} />
+                    </label>
+                    <div className="field-grid">
+                      <label>Generate<select value={generateType} disabled={busy} onChange={(event) => {
+                        setGenerateType(event.target.value);
+                        if (event.target.value === "quiz" && generationFormat === "mixed" && Number(generationCount) < 2) setGenerationCount("2");
+                      }}><option value="flashcards">Flashcards</option><option value="quiz">Quiz</option></select></label>
+                      <label>{generateType === "flashcards" ? "Flashcard count" : "Question count"}<input type="number"
+                        min={generateType === "quiz" && generationFormat === "mixed" ? 2 : 1} max={20} required disabled={busy}
+                        value={generationCount} onChange={(event) => setGenerationCount(event.target.value)} /></label>
+                    </div>
+                    {generateType === "quiz" && <div className="field-grid">
+                      <label>Question format<select value={generationFormat} disabled={busy} onChange={(event) => {
+                        setGenerationFormat(event.target.value);
+                        if (event.target.value === "mixed" && Number(generationCount) < 2) setGenerationCount("2");
+                      }}>{Object.entries(formats).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
+                      <label>Difficulty<select value={generationDifficulty} disabled={busy} onChange={(event) => setGenerationDifficulty(event.target.value)}>
+                        <option value="easy">Easy</option><option value="medium">Medium</option><option value="hard">Hard</option>
+                      </select></label>
+                    </div>}
+                    <p className="field-note">Generated content saves directly to this {selectedSet.set.visibility} study set.</p>
+                    <button className="primary" type="submit" disabled={busy}>{busy ? "Generating…" : generateType === "flashcards" ? "Generate flashcards" : "Generate quiz"}</button>
+                  </form>}
                   <h3>Quizzes</h3>
                   {selectedSet.quizzes.length === 0 ? <p>No quizzes yet.</p> : selectedSet.quizzes.map((savedQuiz) =>
                     <div className="set-row" key={savedQuiz.quizId}>
@@ -897,7 +992,7 @@ function App() {
                     <button
                       className="primary"
                       type="submit"
-                      disabled={postingComment}
+                      disabled={postingComment || !newComment.trim()}
                     >
                       {postingComment
                         ? "Posting..."
@@ -926,7 +1021,9 @@ function App() {
                       {bookmark.quizTitle}
                     </p>
 
-                    <h3>{bookmark.questionText}</h3>
+                    <h3><button className="set-title" disabled={busy}
+                      onClick={() => openQuiz(bookmark.quizId, bookmark.questionId)}>{bookmark.questionText}</button></h3>
+                    <button disabled={busy} onClick={() => openQuiz(bookmark.quizId, bookmark.questionId)}>Practice this question</button>
 
                     {bookmark.explanation && (
                       <p>{bookmark.explanation}</p>
@@ -959,7 +1056,9 @@ function App() {
                   </div>
                 </div>)}
                 {review && <div className="review"><h2>{review.attempt.title} · {review.score}/{review.total}</h2>
-                  {review.questions.map((item) => <AnswerReview key={item.questionId} question={item} />)}</div>}
+                  {review.questions.map((item) => <AnswerReview key={item.questionId} question={item}>
+                    <SaveQuestionButton questionId={item.questionId} bookmarks={bookmarks} pending={bookmarkPending} onToggle={toggleQuestionBookmark} />
+                  </AnswerReview>)}</div>}
               </section>}
 
               {view === "profile" && <div className="profile-grid"><section className="card"><h1>Your profile</h1>

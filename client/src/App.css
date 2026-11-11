@@ -116,6 +116,10 @@ button.primary:not(:disabled):hover, .history-item button:hover, .admin-row butt
 .set-row, .history-item, .admin-row { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 14px 0; border-top: 1px solid var(--line); overflow-wrap: anywhere; }
 .set-row p, .history-item p, .admin-row p { margin: 3px 0 0; color: var(--muted); font-size: 13px; }
 .set-actions { display: flex; flex-wrap: wrap; flex: none; gap: 6px; }
+.set-title { padding: 0; border: 0; background: transparent; color: var(--ink); font: inherit; font-weight: 700; text-align: left; text-decoration: underline; text-underline-offset: 3px; }
+.set-title:hover { color: var(--accent); }
+.set-detail { scroll-margin-top: 24px; }
+.set-generator { border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); padding: 18px 0; margin: 18px 0; }
 .field-grid, .profile-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 15px; align-items: start; }
 .comments-section, .review { margin-top: 22px; padding-top: 18px; border-top: 1px solid var(--line); }
 .admin-row select { max-width: 145px; }

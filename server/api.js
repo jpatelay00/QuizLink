@@ -4,7 +4,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { openDatabase, transaction, utcTimestamp } from "./db.js";
 import { createAuth, hashPassword, verifyPassword } from "./auth.js";
-import { GeminiConfigurationError, generateQuestionHint, generateQuizData, normalizeAnswer, questionTypes, validateQuiz } from "./quiz.js";
+import { GeminiConfigurationError, generateQuestionHint, generateQuizData, generateFlashcardData, normalizeAnswer, questionTypes, validateQuiz, validateFlashcards } from "./quiz.js";
 import { randomUUID } from "node:crypto";
 
 const validEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -14,7 +14,7 @@ const quizAccess = `(z.owner_id = ? OR EXISTS (
   WHERE s.study_set_id = z.study_set_id AND s.owner_id = z.owner_id AND s.visibility = 'public'
 ))`;
 
-export function createApp(database = openDatabase(), quizGenerator = generateQuizData, hintGenerator = generateQuestionHint) {
+export function createApp(database = openDatabase(), quizGenerator = generateQuizData, hintGenerator = generateQuestionHint, flashcardGenerator = generateFlashcardData) {
   const app = express();
   const auth = createAuth(database);
   app.disable("x-powered-by");
@@ -219,6 +219,12 @@ export function createApp(database = openDatabase(), quizGenerator = generateQui
       return res.status(400).json({ error: `Choose a whole number between ${minimum} and 20.` });
     }
     const settings = { questionType, questionCount };
+    const studySetId = req.body?.studySetId ?? null;
+    if (studySetId !== null && (!Number.isSafeInteger(studySetId) || studySetId <= 0)) {
+      return res.status(400).json({ error: "Choose a valid study set." });
+    }
+    if (studySetId !== null && !database.prepare("SELECT 1 FROM study_sets WHERE study_set_id=? AND owner_id=?")
+      .get(studySetId, req.user.userId)) return res.status(404).json({ error: "Study set not found." });
     let data;
     try {
       ({ data } = await quizGenerator(notes, difficulty, settings));
@@ -237,9 +243,9 @@ export function createApp(database = openDatabase(), quizGenerator = generateQui
     }
     const saved = transaction(database, () => {
       const quizId = Number(database.prepare(`
-        INSERT INTO quizzes(owner_id,title,source_text,difficulty,question_type,requested_count)
-        VALUES (?,?,?,?,?,?)
-      `).run(req.user.userId, data.title, notes, difficulty, questionType, questionCount).lastInsertRowid);
+        INSERT INTO quizzes(owner_id,title,source_text,difficulty,question_type,requested_count,study_set_id)
+        VALUES (?,?,?,?,?,?,?)
+      `).run(req.user.userId, data.title, notes, difficulty, questionType, questionCount, studySetId).lastInsertRowid);
       const questions = data.questions.map((question, index) => {
         const type = question.questionType ?? "multiple_choice";
         const correctText = type === "fill_blank" ? question.correctText.trim() : null;
@@ -260,7 +266,7 @@ export function createApp(database = openDatabase(), quizGenerator = generateQui
         ? data.flashcards.filter((card) => typeof card?.front === "string" && typeof card.back === "string").slice(0, 5)
         : [];
       return { title: data.title, summary: typeof data.summary === "string" ? data.summary : "",
-        flashcards, quizId, questions, difficulty, questionType, canEdit: true, studySetId: null };
+        flashcards, quizId, questions, difficulty, questionType, canEdit: true, studySetId };
     });
     res.status(201).json(saved);
   });
@@ -339,7 +345,8 @@ export function createApp(database = openDatabase(), quizGenerator = generateQui
              s.topic, s.subject, s.visibility, s.created_at AS createdAt,
              u.display_name AS ownerName,
              EXISTS(SELECT 1 FROM favorite_study_sets f WHERE f.study_set_id=s.study_set_id AND f.user_id=?) AS isFavorite,
-             (SELECT COUNT(*) FROM flashcards c WHERE c.study_set_id=s.study_set_id) AS cardCount
+             (SELECT COUNT(*) FROM flashcards c WHERE c.study_set_id=s.study_set_id) AS cardCount,
+             (SELECT COUNT(*) FROM quizzes z WHERE z.study_set_id=s.study_set_id AND z.owner_id=s.owner_id) AS quizCount
       FROM study_sets s JOIN users u ON u.user_id=s.owner_id
       WHERE s.owner_id=? OR s.visibility='public'
       ORDER BY s.created_at DESC, s.study_set_id DESC
@@ -560,6 +567,34 @@ export function createApp(database = openDatabase(), quizGenerator = generateQui
     res.status(201).json({ flashcardId: Number(result.lastInsertRowid) });
   });
 
+  app.post("/api/study-sets/:id/generate-flashcards", auth.requireCsrf, async (req, res) => {
+    const studySetId = Number(req.params.id);
+    const notes = typeof req.body?.notes === "string" ? req.body.notes.trim() : "";
+    const count = req.body?.count;
+    if (!Number.isSafeInteger(studySetId) || studySetId <= 0 ||
+        notes.length < 20 || notes.length > 20000 || !Number.isInteger(count) || count < 1 || count > 20) {
+      return res.status(400).json({ error: "Provide 20–20,000 characters of notes and choose 1–20 flashcards." });
+    }
+    if (!database.prepare("SELECT 1 FROM study_sets WHERE study_set_id=? AND owner_id=?")
+      .get(studySetId, req.user.userId)) return res.status(404).json({ error: "Study set not found." });
+    let cards;
+    try {
+      cards = await flashcardGenerator(notes, count);
+      if (!validateFlashcards(cards, count)) throw new Error("Invalid flashcards");
+    } catch (error) {
+      const message = error instanceof GeminiConfigurationError
+        ? "Flashcard generation is unavailable. This deployment needs a Gemini API key."
+        : error?.status === 429 ? "Gemini is rate limiting requests. Wait and try again."
+          : "Could not generate valid flashcards. Try again or adjust your notes.";
+      return res.status(503).json({ error: message });
+    }
+    transaction(database, () => {
+      const insert = database.prepare("INSERT INTO flashcards(study_set_id,front_text,back_text) VALUES (?,?,?)");
+      for (const card of cards) insert.run(studySetId, card.front.trim(), card.back.trim());
+    });
+    res.status(201).json({ count: cards.length });
+  });
+
   app.put("/api/study-sets/:id/favorite", auth.requireCsrf, (req, res) => {
     const studySetId = Number(req.params.id);
     if (!Number.isSafeInteger(studySetId) || studySetId <= 0) return res.status(400).json({ error: "Invalid study set." });
@@ -622,6 +657,7 @@ export function createApp(database = openDatabase(), quizGenerator = generateQui
     const bookmarks = database.prepare(`
       SELECT
         b.question_id AS questionId,
+        z.quiz_id AS quizId,
         b.created_at AS bookmarkedAt,
         q.prompt AS questionText,
         CASE WHEN z.owner_id = b.user_id OR EXISTS (
